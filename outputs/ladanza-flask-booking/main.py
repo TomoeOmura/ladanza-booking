@@ -143,15 +143,7 @@ def slots():
         return jsonify({"error": "無効なメニューです"}), 400
     days = min(max(int(request.args.get("days", 14)), 1), 31)
     now = datetime.now(JST)
-    opening, closing_time = time(10, 0), time(22, 0)event_id = create_event(calendar_id, start, end, payload)
-
-        app.logger.info(
-        "Google Calendar event linked to booking calendar_id=%s event_id=%s instructor=%s start=%s",
-        calendar_id,
-        event_id,
-        payload["instructor"],
-        start.isoformat(),
-    )
+    opening, closing_time = time(10, 0), time(22, 0)
     range_start = datetime.combine(now.date(), opening, JST)
     range_end = datetime.combine(now.date() + timedelta(days=days), closing_time, JST)
     busy = get_busy_periods(calendar_for(instructor), range_start, range_end)
@@ -197,6 +189,13 @@ def book():
         return jsonify({"detail": "この時間帯はすでに予約されています"}), 409
     token = secrets.token_urlsafe(32)
     event_id = create_event(calendar_id, start, end, payload)
+    app.logger.info(
+        "Google Calendar event linked to booking calendar_id=%s event_id=%s instructor=%s start=%s",
+        calendar_id,
+        event_id,
+        payload["instructor"],
+        start.isoformat(),
+    )
     with db() as con:
         cursor = con.execute("""INSERT INTO bookings
             (token,menu,instructor,starts_at,duration,name,phone,email,event_id)
