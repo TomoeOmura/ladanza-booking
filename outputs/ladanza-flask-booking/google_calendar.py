@@ -8,6 +8,7 @@ from pathlib import Path
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 logger = logging.getLogger(__name__)
@@ -51,23 +52,43 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
              "description": f"講師: {booking['instructor']}\nお名前: {booking['name']}\n電話: {booking['phone']}\nメール: {booking['email']}",
              "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Tokyo"},
              "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Tokyo"}}
+    logger.warning(
+        "Google Calendar API registration started calendar_id=%s start=%s end=%s",
+        calendar_id,
+        start.isoformat(),
+        end.isoformat(),
+    )
+    response_status: dict[str, int | None] = {"value": None}
+    request = service().events().insert(calendarId=calendar_id, body=event)
+    request.add_response_callback(
+        lambda http_response: response_status.update(value=getattr(http_response, "status", None))
+    )
     try:
-        response = service().events().insert(calendarId=calendar_id, body=event).execute()
-    except Exception:
-        logger.exception(
-            "Google Calendar events.insert failed calendar_id=%s start=%s end=%s",
+        response = request.execute()
+    except HttpError as exc:
+        status = getattr(exc.resp, "status", None)
+        logger.error(
+            "Google Calendar API registration failed calendar_id=%s http_status=%s error=%s",
             calendar_id,
-            start.isoformat(),
-            end.isoformat(),
+            status,
+            exc.reason,
+        )
+        raise
+    except Exception as exc:
+        logger.error(
+            "Google Calendar API registration failed calendar_id=%s http_status=%s error=%s",
+            calendar_id,
+            response_status["value"],
+            str(exc),
         )
         raise
 
     event_id = response.get("id")
-    logger.info(
-        "Google Calendar events.insert succeeded calendar_id=%s event_id=%s status=%s html_link=%s",
+    logger.warning(
+        "Google Calendar API registration succeeded calendar_id=%s http_status=%s event_id=%s html_link=%s",
         calendar_id,
+        response_status["value"],
         event_id,
-        response.get("status"),
         response.get("htmlLink"),
     )
     if not event_id:
