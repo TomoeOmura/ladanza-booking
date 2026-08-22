@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
+logger = logging.getLogger(__name__)
 
 
 def _credentials_path() -> Path:
@@ -49,7 +51,28 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
              "description": f"講師: {booking['instructor']}\nお名前: {booking['name']}\n電話: {booking['phone']}\nメール: {booking['email']}",
              "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Tokyo"},
              "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Tokyo"}}
-    return service().events().insert(calendarId=calendar_id, body=event).execute()["id"]
+    try:
+        response = service().events().insert(calendarId=calendar_id, body=event).execute()
+    except Exception:
+        logger.exception(
+            "Google Calendar events.insert failed calendar_id=%s start=%s end=%s",
+            calendar_id,
+            start.isoformat(),
+            end.isoformat(),
+        )
+        raise
+
+    event_id = response.get("id")
+    logger.info(
+        "Google Calendar events.insert succeeded calendar_id=%s event_id=%s status=%s html_link=%s",
+        calendar_id,
+        event_id,
+        response.get("status"),
+        response.get("htmlLink"),
+    )
+    if not event_id:
+        raise RuntimeError("Google Calendar API response did not contain an event id")
+    return event_id
 
 
 def delete_event(calendar_id: str, event_id: str | None):
