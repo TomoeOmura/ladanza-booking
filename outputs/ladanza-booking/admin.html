@@ -1,0 +1,57 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>La Danza Admin</title><style>
+:root{--g:#173f35;--light:#edf3ef;--gold:#c6a96d}*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#f5f6f3;color:#18372f}header{background:var(--g);color:white;padding:25px 18px}header div,main{max-width:920px;margin:auto}.brand{font-family:serif;font-size:22px}.sub{opacity:.65;font-size:11px;letter-spacing:.14em}main{padding:18px}.login,.card{background:#fff;border:1px solid #e1e5e1;border-radius:16px;padding:16px;margin-bottom:13px}.login{display:flex;gap:8px}.login input,input,select{min-width:0;padding:12px;border:1px solid #d7ddd9;border-radius:10px;font:inherit}.btn{border:0;border-radius:10px;padding:12px 15px;background:var(--g);color:white;font-weight:600}.ghost{background:var(--light);color:var(--g)}h1{font-size:22px}h2{font-size:15px;margin:25px 0 11px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.stat{background:var(--g);color:white;border-radius:14px;padding:15px}.stat b{display:block;font-size:24px}.stat small{opacity:.7}.row{display:flex;align-items:center;gap:12px}.row .body{flex:1}.row strong,.row small{display:block}.row small{color:#74817c;margin-top:4px}.pill{padding:5px 8px;background:var(--light);border-radius:20px;font-size:10px}.actions{display:flex;gap:6px}.actions button{padding:8px;border:0;border-radius:8px}.newslot{display:grid;grid-template-columns:1fr 1fr;gap:8px}.newslot button{grid-column:1/-1}.hidden{display:none}@media(max-width:540px){.stats{grid-template-columns:1fr 1fr}.stats .stat:last-child{grid-column:1/-1}.row{align-items:flex-start}.actions{flex-direction:column}}</style></head><body><header><div><div class="brand">La Danza</div><div class="sub">STUDIO MANAGEMENT</div></div></header><main><div id="login" class="login"><input id="token" type="password" placeholder="管理者トークン" value="ladanza-demo"><button class="btn" onclick="load()">表示</button></div><section id="app" class="hidden"><h1>予約ダッシュボード</h1><div class="stats"><div class="stat"><small>本日の予約</small><b id="today">0</b></div><div class="stat"><small>今週の予約</small><b id="week">0</b></div><div class="stat"><small>空き枠</small><b id="open">0</b></div></div><h2>予約一覧</h2><div id="bookings"></div><h2>枠管理</h2><div id="slots"></div><h2>新しい枠を追加</h2><form id="newslot" class="card newslot"><input name="instructor" placeholder="講師名" required><input name="starts_at" type="datetime-local" required><input name="duration_minutes" type="number" value="60" min="30"><input name="capacity" type="number" value="1" min="1" max="15"><button class="btn">枠を追加</button></form></section></main><script>
+let token='',demoMode=false;
+const headers=()=>({'Content-Type':'application/json','X-Admin-Token':token});
+const dt=s=>new Intl.DateTimeFormat('ja-JP',{month:'numeric',day:'numeric',weekday:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(s));
+const at=(days,hour,minute=0)=>{const d=new Date();d.setDate(d.getDate()+days);d.setHours(hour,minute,0,0);return d.toISOString()};
+let demoData={bookings:[
+  {id:1,name:'山田 花子',menu:'無料体験 20分',phone:'090-1234-5678',starts_at:at(0,14),instructor:'大村 尊'},
+  {id:2,name:'佐藤 美咲',menu:'個人レッスン 60分',phone:'080-9876-5432',starts_at:at(0,18,30),instructor:'大村 友恵'},
+  {id:3,name:'鈴木 健太',menu:'サロン・グループ',phone:'070-2468-1357',starts_at:at(2,11),instructor:'廣瀬 裕貴'},
+  {id:4,name:'高橋 玲奈',menu:'初心者パック 30分',phone:'090-5555-1212',starts_at:at(4,16),instructor:'大村 尊'}
+],slots:[
+  {id:11,starts_at:at(0,14),instructor:'大村 尊',booked:1,capacity:1,available:false},
+  {id:12,starts_at:at(0,18,30),instructor:'大村 友恵',booked:1,capacity:1,available:false},
+  {id:13,starts_at:at(1,10),instructor:'大村 尊',booked:7,capacity:15,available:true},
+  {id:14,starts_at:at(2,11),instructor:'廣瀬 裕貴',booked:12,capacity:15,available:true},
+  {id:15,starts_at:at(3,15),instructor:'大村 友恵',booked:0,capacity:1,available:true}
+]};
+
+function render(d){
+  document.querySelector('#login').classList.add('hidden');document.querySelector('#app').classList.remove('hidden');
+  const today=new Date().toDateString();
+  document.querySelector('#today').textContent=d.bookings.filter(b=>new Date(b.starts_at).toDateString()===today).length;
+  document.querySelector('#week').textContent=d.bookings.length;document.querySelector('#open').textContent=d.slots.filter(s=>s.available).length;
+  document.querySelector('#bookings').innerHTML=d.bookings.length?d.bookings.map(b=>`<div class="card row"><div class="body"><strong>${b.name} <span class="pill">${b.menu}</span></strong><small>${dt(b.starts_at)}｜${b.instructor}｜${b.phone}</small></div><div class="actions"><button onclick="cancelBooking(${b.id})">取消</button></div></div>`).join(''):'<div class="card">今週の予約はありません</div>';
+  document.querySelector('#slots').innerHTML=d.slots.map(s=>`<div class="card row"><div class="body"><strong>${dt(s.starts_at)}｜${s.instructor}</strong><small>${s.booked}/${s.capacity}名・${s.available?'受付中':'受付停止'}</small></div><div class="actions"><button class="ghost" onclick="toggleSlot(${s.id},${!s.available})">${s.available?'停止':'再開'}</button><button onclick="capacity(${s.id},${s.capacity})">定員</button></div></div>`).join('');
+}
+
+async function load(){
+  token=document.querySelector('#token').value;
+  if(token==='admin'){demoMode=true;render(demoData);return}
+  if(location.protocol==='file:'){alert('デモ用パスワードは「admin」です');return}
+  try{const r=await fetch('/api/admin/overview',{headers:headers()});if(!r.ok)throw new Error();render(await r.json())}catch{alert('パスワードを確認してください')}
+}
+
+async function toggleSlot(id,v){
+  if(demoMode){const s=demoData.slots.find(x=>x.id===id);s.available=v;render(demoData);return}
+  await fetch('/api/admin/slots/'+id,{method:'PATCH',headers:headers(),body:JSON.stringify({is_open:v})});load()
+}
+async function capacity(id,now){
+  const n=Number(prompt('新しい定員（1〜15）',now));if(!n||n<1||n>15)return;
+  if(demoMode){const s=demoData.slots.find(x=>x.id===id);s.capacity=n;s.available=s.booked<n;render(demoData);return}
+  await fetch('/api/admin/slots/'+id,{method:'PATCH',headers:headers(),body:JSON.stringify({capacity:n})});load()
+}
+async function cancelBooking(id){
+  if(!confirm('この予約をキャンセルしますか？'))return;
+  if(demoMode){demoData.bookings=demoData.bookings.filter(b=>b.id!==id);render(demoData);return}
+  await fetch('/api/admin/bookings/'+id,{method:'DELETE',headers:headers()});load()
+}
+document.querySelector('#newslot').onsubmit=async e=>{
+  e.preventDefault();const d=Object.fromEntries(new FormData(e.target));d.duration_minutes=+d.duration_minutes;d.capacity=+d.capacity;
+  if(demoMode){demoData.slots.push({id:Date.now(),instructor:d.instructor,starts_at:new Date(d.starts_at).toISOString(),booked:0,capacity:d.capacity,available:true});e.target.reset();render(demoData);return}
+  const r=await fetch('/api/admin/slots',{method:'POST',headers:headers(),body:JSON.stringify(d)});if(!r.ok)return alert('入力内容を確認してください');e.target.reset();load()
+};
+document.querySelector('#token').value='';document.querySelector('#token').placeholder='パスワード（admin）';
+document.querySelector('#token').addEventListener('keydown',e=>{if(e.key==='Enter')load()});
+</script></body></html>

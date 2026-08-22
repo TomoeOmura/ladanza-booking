@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: ladanza-booking
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: GOOGLE_CREDENTIALS_FILE
+        value: /etc/secrets/credentials.json
+      - key: GOOGLE_CALENDAR_ID
+        sync: false
+      - key: GROUP_CALENDAR_ID
+        sync: false
+      - key: CALENDAR_MAP_JSON
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
