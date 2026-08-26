@@ -122,6 +122,20 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("架空の空き枠は表示していません", page)
         self.assertNotIn('name="email"', page)
         self.assertNotIn("メールアドレス", page)
+        self.assertIn("days:'31'", page)
+        self.assertIn('id="datePicker"', page)
+        self.assertIn('id="timePicker" class="hidden"', page)
+        self.assertIn("日付を選び直す", page)
+
+    def test_slots_default_to_a_31_day_window(self):
+        response = self.client.get("/api/slots", query_string={
+            "menu": "個人レッスン 30分", "instructor": "大村 尊"
+        })
+        self.assertEqual(response.status_code, 200)
+        slots = response.get_json()
+        self.assertTrue(slots)
+        last_date = max(datetime.fromisoformat(item["starts_at"]).date() for item in slots)
+        self.assertGreaterEqual(last_date, datetime.now(JST).date() + timedelta(days=29))
 
     def test_privacy_consent_is_required(self):
         payload = self._payload()
