@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 
+from line_notification import send_line_admin_notification
 from google_calendar import (
     calendar_for,
     cancel_booking_event,
@@ -455,6 +456,23 @@ def book():
         app.logger.exception("Google Calendar booking registration failed")
         return jsonify({"detail": "予約を登録できませんでした。時間をおいてお試しください"}), 503
     app.logger.info("Booking confirmed event_id=%s instructor=%s start=%s", event_id, instructor, start.isoformat())
+    if source == "line":
+        try:
+            send_line_admin_notification(
+                name=name,
+                phone=phone,
+                menu=str(payload["menu"]),
+                starts_at=start,
+                instructor=instructor,
+                participants=event_private(created).get("participants"),
+                reservation_number=reservation_number(event_id),
+            )
+        except Exception as exc:
+            app.logger.error(
+                "LINE admin notification failed event_id=%s error_type=%s",
+                event_id,
+                type(exc).__name__,
+            )
     return jsonify(booking_response(created, public_url, token)), 201
 
 
