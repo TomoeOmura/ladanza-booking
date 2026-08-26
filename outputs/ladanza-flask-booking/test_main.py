@@ -58,11 +58,13 @@ class BookingApiTests(unittest.TestCase):
                 return deepcopy(event)
         return None
 
-    def _find_bookings_by_phone_hash(self, _calendar, phone_hash):
+    def _find_bookings_by_phone_hash(self, _calendar, phone_hash, *, upcoming_only=True):
         result = []
         for event in self.events.values():
             private = event.get("extendedProperties", {}).get("private", {})
             if private.get("phone_hash") == phone_hash:
+                if upcoming_only and main.event_window(event)[0] < datetime.now(JST):
+                    continue
                 result.append(deepcopy(event))
         return result
 
@@ -126,6 +128,8 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn('id="datePicker"', page)
         self.assertIn('id="timePicker" class="hidden"', page)
         self.assertIn("日付を選び直す", page)
+        self.assertIn("LINE友だち追加特典：20分無料体験（お1人様1回）", page)
+        self.assertIn("trialOffer=source==='line'&&params.get('trial')==='1'", page)
 
     def test_slots_default_to_a_31_day_window(self):
         response = self.client.get("/api/slots", query_string={
@@ -143,6 +147,18 @@ class BookingApiTests(unittest.TestCase):
         response = self.client.post("/api/bookings", json=payload)
         self.assertEqual(response.status_code, 400)
         self.assertIn("同意", response.get_json()["detail"])
+
+    def test_free_trial_is_limited_to_once_per_phone(self):
+        first = self.client.post("/api/bookings", json=self._payload(
+            menu="無料体験 20分", start=self._future_start(10)))
+        self.assertEqual(first.status_code, 201)
+        repeated = self.client.post("/api/bookings", json=self._payload(
+            menu="無料体験 20分", start=self._future_start(11)))
+        self.assertEqual(repeated.status_code, 409)
+        self.assertIn("お1人様1回", repeated.get_json()["detail"])
+        other_phone = self.client.post("/api/bookings", json=self._payload(
+            menu="無料体験 20分", start=self._future_start(11), phone="070-9999-9999"))
+        self.assertEqual(other_phone.status_code, 201)
 
     def test_same_instructor_is_blocked_but_different_instructor_is_allowed(self):
         start = self._future_start()
