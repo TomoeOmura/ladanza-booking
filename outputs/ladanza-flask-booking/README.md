@@ -1,25 +1,63 @@
 # La Danza Flask予約システム
 
-Googleカレンダーを空き状況の基準にするFlask版です。営業時間は10:00〜22:00、予約開始時刻は30分単位、日曜は表示しません。メニューの所要時間（20・30・60分）全体が空いている場合だけ予約できます。
+La Danza Dance Studioの予約画面・講師別予約枠管理・Googleカレンダー連携を提供するFlaskアプリです。
 
-## 1. Google Cloudの準備
+## 予約ルール
 
-1. [Google Cloud Console](https://console.cloud.google.com/)でプロジェクトを作成します。
-2. 「APIとサービス」→「ライブラリ」で **Google Calendar API** を検索し、「有効にする」を押します。
-3. 「IAMと管理」→「サービス アカウント」→「サービス アカウントを作成」を押します。名前は `ladanza-booking` などで構いません。通常、この用途ではプロジェクト自体への強いIAMロールは不要です。
-4. 作成したサービスアカウントを開き、「キー」→「鍵を追加」→「新しい鍵を作成」→「JSON」→「作成」を押します。
-5. ダウンロードしたJSONを `credentials.json` に改名します。このファイルは秘密鍵です。GitHubやメールへ公開しないでください。
+- 講師：大村 尊、大村 友恵、廣瀬 裕貴、スタジオ主催
+- メニュー：個人レッスン60分・30分、無料体験20分、初心者パック30分、初級パック30分、サロン・グループ
+- 3名の講師は、同じ時刻に別々の予約を受けられます。
+- 同じ講師の時間が重なる予約は受け付けません。
+- サロン・グループは、同じ回について設定定員まで受け付けます（初期値15名）。
+- GoogleカレンダーはLa Danza共通の1個を使用します。アプリが作成する予定には担当講師情報を付け、講師別に重複を判定します。
+- 講師情報が付いていないGoogleカレンダー予定は、スタジオ全体の休業・使用不可時間として全講師を停止します。
 
-## 2. Googleカレンダーを共有する
+## 安全上の変更
 
-1. `credentials.json` をテキストエディターで開き、`client_email` の値（例: `ladanza-booking@project.iam.gserviceaccount.com`）を控えます。
-2. 予約を書き込みたいGoogleカレンダーを開き、「設定と共有」→「特定のユーザーまたはグループと共有する」へ進みます。
-3. 先ほどの `client_email` を追加し、権限を **予定の変更** にします。
-4. 同じカレンダー設定の「カレンダーの統合」から **カレンダーID** をコピーします。講師別カレンダーがある場合は、各カレンダーで同じ共有操作を行います。
+- API接続に失敗した場合、架空の予約枠は表示しません。
+- 管理パスワードに既定値はありません。
+- 予約確認用tokenと二重送信防止キーは、Googleカレンダーの非公開項目へハッシュ化して保存します。
+- 同意日時と予約元（`website` / `line`）を保存します。
+- 空き状況・グループ残席・予約確認・キャンセルはGoogleカレンダーを基準に処理します。
+- 受付時間などの管理設定もGoogleカレンダーの非公開項目へ圧縮して保存します。
+- Google認証JSONはGitHubへ保存しません。
 
-## 3. ローカル起動
+## 必須の環境変数
 
-このフォルダー直下に `credentials.json` を置きます。
+```env
+GOOGLE_CREDENTIALS_FILE=/etc/secrets/credentials.json
+GOOGLE_CALENDAR_ID=La Danza共通カレンダーID
+PUBLIC_URL=https://公開するRender URL
+ADMIN_TOKEN=十分に長い管理パスワード
+TOKEN_SECRET=32文字以上のランダムな秘密文字列
+```
+
+`ADMIN_TOKEN` と `TOKEN_SECRET` は同じ値にしないでください。チャット、GitHub、メールへ貼り付けないでください。
+
+## Google Cloud / Googleカレンダー
+
+1. Google Calendar APIを有効にします。
+2. 予約専用サービスアカウントの新しいJSON鍵を作成します。
+3. La Danza共通カレンダーをサービスアカウントへ「予定の変更」権限で共有します。
+4. RenderのSecret Fileとして `/etc/secrets/credentials.json` に設定します。
+5. 漏えいした可能性のある旧鍵をGoogle Cloud Consoleで無効化・削除します。
+
+## Render
+
+- Root Directory：`outputs/ladanza-flask-booking`
+- Build Command：`pip install -r requirements.txt`
+- Start Command：`gunicorn main:app`
+- Health Check Path：`/health`
+
+予約情報と管理設定はGoogleカレンダーへ保存するため、Renderの永続ディスクと有料インスタンスは不要です。無料インスタンスは15分間アクセスがないと休止し、次回の初回表示に時間がかかる場合があります。
+
+## 導線
+
+- ホームページ：`https://公開URL/?source=website`
+- 公式LINE：`https://公開URL/?source=line`
+- 管理画面：`https://公開URL/admin`
+
+## ローカル確認
 
 ```powershell
 python -m venv .venv
@@ -29,38 +67,13 @@ Copy-Item .env.example .env
 python main.py
 ```
 
-`.env` のカレンダーIDを実際の値へ変更してから、`http://localhost:8000` を開きます。
-
-```env
-GOOGLE_CALENDAR_ID=共通または既定のカレンダーID
-GROUP_CALENDAR_ID=グループレッスン用カレンダーID
-CALENDAR_MAP_JSON={"大村 尊":"講師1のID","大村 友恵":"講師2のID","廣瀬 裕貴":"講師3のID"}
-ADMIN_TOKEN=admin
-```
-
-初期パスワードは `admin` です。Renderへ公開する前に、`ADMIN_TOKEN` を十分に長い推測されにくい値へ必ず変更してください。
-
-起動後、`http://localhost:8000/admin` を開き、`ADMIN_TOKEN` に設定したパスワードでログインします。「大村 尊」「大村 友恵」「廣瀬 裕貴」「スタジオ主催」を色分けしたタブから選び、先生ごとに10:00〜21:30の30分枠を曜日別に設定できます。「日付を指定」へ切り替えると、特定の日だけ通常の曜日設定を変更できます。「曜日設定をコピー」「この日を休み」「個別設定を解除」に対応し、個別設定がない日は毎週の曜日設定を自動使用します。60分レッスンでは、その講師について連続する2つの30分枠が両方有効な場合だけ予約できます。
-
-## 4. Renderへデプロイ
-
-1. `credentials.json` と `.env` を除くファイルをGitHubリポジトリへpushします。`.gitignore` が両方を除外します。
-2. Renderで **New → Web Service** を選び、GitHubリポジトリを接続します。`render.yaml` を使う場合はBlueprintから作成できます。
-3. Build Commandは `pip install -r requirements.txt`、Start Commandは `gunicorn main:app` です。
-4. Renderのサービス画面で **Environment → Secret Files → Add Secret File** を選びます。
-5. Filenameを `credentials.json` とし、Googleから取得したJSON全文を内容欄へ貼り付けます。コードは `/etc/secrets/credentials.json` から読み込みます。
-6. Environment Variablesへ `GOOGLE_CALENDAR_ID`、`GROUP_CALENDAR_ID`、`CALENDAR_MAP_JSON`、公開後の `PUBLIC_URL`、管理画面用の `ADMIN_TOKEN` を設定します。
-7. 保存して再デプロイし、`https://あなたのURL/health` が `{"ok":true}` を返すことを確認します。
-
 ## API
 
-- `GET /api/slots?instructor=大村%20尊&menu=個人レッスン%2060分` — Google予定を除いた14日分の空き枠
-- `POST /api/bookings` — 空き状況を再確認して予約・Google予定登録
-- `GET /api/reservations/<token>` — 予約内容確認
-- `POST /api/reservations/<token>/cancel` — Google予定削除とキャンセル
+- `GET /api/slots?instructor=大村%20尊&menu=個人レッスン%2060分`
+- `POST /api/bookings`
+- `GET /api/reservations/<token>`
+- `POST /api/reservations/<token>/cancel`
+- `GET /api/admin/settings`
+- `PUT /api/admin/settings`
 
-## 運用上の注意
-
-- サービスアカウント鍵は絶対にGitへコミットしないでください。漏えいした場合はGoogle Cloud Consoleで直ちに鍵を無効化・削除します。
-- Renderの通常ファイルシステムは永続保存用途には向きません。本番で予約確認データを確実に保持するには、Render Persistent Diskを付けて `DATABASE_PATH` をその配下へ設定するか、PostgreSQLへ移行してください。空き枠判定自体はGoogleカレンダーを参照します。
-- 同時予約が非常に多い場合はGoogle予定作成前後の排他制御を追加してください。本実装は小規模スタジオ向けです。
+更新日：2026年8月26日

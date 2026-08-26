@@ -1,6 +1,7 @@
 .env
 credentials.json
 reservations.db
+*.db
 __pycache__/
 .venv/
-
+.pytest_cache/
