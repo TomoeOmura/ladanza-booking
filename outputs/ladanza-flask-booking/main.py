@@ -20,6 +20,7 @@ from google_calendar import (
     cancel_booking_event,
     create_event,
     find_booking_by_number,
+    find_bookings_by_phone_hash,
     get_event,
     list_calendar_events,
     load_calendar_settings,
@@ -147,6 +148,11 @@ def normalize_lookup_payload(payload: dict) -> tuple[str, str, str] | None:
     if not re.fullmatch(r"\d{10,11}", phone):
         return None
     return booking_id, "phone", phone
+
+
+def normalize_lookup_phone(payload: dict) -> str | None:
+    phone = re.sub(r"[^0-9]", "", str(payload.get("contact", "")))
+    return phone if re.fullmatch(r"\d{10,11}", phone) else None
 
 
 def lookup_contact_matches(event: dict, kind: str, value: str) -> bool:
@@ -551,6 +557,25 @@ def reservation_lookup():
     if not event:
         return jsonify({"detail": "予約番号または連絡先が一致しません"}), 404
     return jsonify(lookup_response(event))
+
+
+@app.post("/api/reservations/lookup-all")
+def reservation_lookup_all():
+    payload = request.get_json(silent=True) or {}
+    phone = normalize_lookup_phone(payload)
+    if not phone:
+        return jsonify({"detail": "電話番号を確認してください"}), 400
+    try:
+        events = find_bookings_by_phone_hash(
+            calendar_for("スタジオ主催"), contact_digest("phone", phone)
+        )
+    except Exception:
+        app.logger.exception("Reservation phone lookup failed")
+        return jsonify({"detail": "予約情報を取得できませんでした"}), 503
+    bookings = sorted((lookup_response(event) for event in events), key=lambda item: item["starts_at"])
+    if not bookings:
+        return jsonify({"detail": "この電話番号の今後の予約は見つかりませんでした"}), 404
+    return jsonify({"bookings": bookings})
 
 
 @app.post("/api/reservations/lookup/cancel")
