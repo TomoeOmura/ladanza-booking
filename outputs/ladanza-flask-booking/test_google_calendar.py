@@ -68,11 +68,11 @@ class SharedCalendarTests(unittest.TestCase):
     def test_same_group_session_can_accept_more_participants(self):
         start = "2030-01-07T14:00:00+09:00"
         items = [event(start, "2030-01-07T14:30:00+09:00", instructor="スタジオ主催",
-                       menu="サロン・グループ", kind="group")]
+                       menu="サロン", kind="group")]
         with patch.object(google_calendar, "service", return_value=_Service(items)):
             periods = google_calendar.get_busy_periods(
                 "shared", datetime(2030, 1, 7, 13, tzinfo=JST), datetime(2030, 1, 7, 15, tzinfo=JST),
-                "スタジオ主催", {"menu": "サロン・グループ", "starts_at": start})
+                "スタジオ主催", {"menu": "サロン", "starts_at": start})
         self.assertEqual(periods, [])
 
 
