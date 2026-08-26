@@ -19,7 +19,7 @@
 <body>
 <main class="shell">
   <header><a class="brand" href="/" aria-label="予約画面の最初に戻る">La Danza<small>DANCE STUDIO</small></a><div><a class="home" href="https://la-danza.studio.site/">公式サイト</a>　<span class="step">STEP <span id="stepNo">01</span> / 03</span></div></header>
-  <div class="progress"><i id="bar"></i></div><div id="message" class="message hidden" role="alert"></div>
+  <div class="progress"><i id="bar"></i></div><div id="trialOffer" class="summary hidden">LINE友だち追加特典：20分無料体験（お1人様1回）</div><div id="message" class="message hidden" role="alert"></div>
   <section id="s1" class="panel"><span class="eyebrow">Choose your lesson</span><h1>ご希望のレッスンと講師を<br>お選びください</h1><p class="lead">メニューと担当講師をお選びください。</p><div id="menus" class="grid"></div><div id="instructorArea"><p class="eyebrow" style="margin-top:24px">Instructor</p><div id="teachers" class="teachers"></div></div></section>
   <section id="s2" class="panel hidden"><span class="eyebrow">Date &amp; time</span><h1>ご希望の日時を<br>お選びください</h1><p class="lead">本日を含む31日分の空き状況を表示します。日付を選ぶと、その日の予約可能な時間を確認できます。</p><div id="slotLoading" class="loading hidden">空き状況を確認しています…</div><div id="datePicker"><p class="eyebrow picker-label">1. 日付を選ぶ</p><div id="dates" class="dates"></div></div><div id="timePicker" class="hidden"><div class="slot-head"><div><p class="eyebrow picker-label">2. 時間を選ぶ</p><h2 id="selectedDate"></h2></div><button id="changeDate" class="change-date" type="button">日付を選び直す</button></div><div id="times" class="times"></div></div></section>
   <section id="s3" class="panel hidden"><span class="eyebrow">Your details</span><h1>ご連絡先を<br>お知らせください</h1><div id="summary" class="summary"></div><form id="form"><div class="field"><label for="name">お名前</label><input id="name" name="name" type="text" autocomplete="name" required maxlength="80" placeholder="山田 花子"></div><div class="field"><label for="phone">電話番号</label><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="090-1234-5678"></div><label class="consent"><input id="privacy" name="privacy_consent" type="checkbox" required><span><a href="/privacy" target="_blank" rel="noopener">個人情報の取り扱い</a>を確認し、予約に必要な情報をLa Danzaが利用することに同意します。</span></label></form></section>
@@ -29,13 +29,14 @@
 <script>
 const menus=['個人レッスン 60分','個人レッスン 30分','無料体験 20分','初心者パック 30分','初級パック30分','サロン・グループ'];
 const teachers=['大村 尊','大村 友恵','廣瀬 裕貴'];
-const params=new URLSearchParams(location.search),source=params.get('source')==='line'?'line':'website';
+const params=new URLSearchParams(location.search),source=params.get('source')==='line'?'line':'website',trialOffer=source==='line'&&params.get('trial')==='1';
 const requestKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 let state={step:1,menu:null,teacher:null,slot:null,slots:[]};
 const $=s=>document.querySelector(s),parseDate=s=>new Date(s.length===10?s+'T00:00:00+09:00':s),fmt=d=>new Intl.DateTimeFormat('ja-JP',{month:'long',day:'numeric',weekday:'short'}).format(d),weekday=d=>new Intl.DateTimeFormat('ja-JP',{weekday:'short'}).format(d);
 const showMessage=text=>{$('#message').textContent=text;$('#message').classList.toggle('hidden',!text)};
 $('#menus').innerHTML=menus.map(m=>`<button type="button" class="card" data-menu="${m}" aria-pressed="false"><strong>${m}</strong><small>${m.includes('グループ')?'最大15名・残席表示':'マンツーマン'}</small></button>`).join('');
 $('#teachers').innerHTML=teachers.map((t,i)=>`<button type="button" class="teacher" data-teacher="${t}" aria-pressed="false"><span class="avatar avatar-instructor-${i}">${t[0]}</span><strong>${t}</strong></button>`).join('');
+if(trialOffer){const trialButton=$('[data-menu="無料体験 20分"]');$('#trialOffer').classList.remove('hidden');chooseMenu('無料体験 20分');select('[data-menu]',trialButton);update()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-menu],[data-teacher],[data-slot],[data-date]');if(!b)return;if(b.dataset.menu){chooseMenu(b.dataset.menu);select('[data-menu]',b)}if(b.dataset.teacher){state.teacher=b.dataset.teacher;state.slot=null;select('[data-teacher]',b)}if(b.dataset.date){state.slot=null;showTimeSelection(b.dataset.date);select('[data-date]',b)}if(b.dataset.slot){state.slot=state.slots.find(x=>String(x.id)===b.dataset.slot);select('[data-slot]',b)}update()});
 function chooseMenu(menu){const wasGroup=state.menu==='サロン・グループ';state.menu=menu;state.slot=null;if(menu==='サロン・グループ'){state.teacher='スタジオ主催';$('#instructorArea').classList.add('hidden');document.querySelectorAll('[data-teacher]').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-pressed','false')})}else{$('#instructorArea').classList.remove('hidden');if(wasGroup)state.teacher=null}}
 function select(q,b){document.querySelectorAll(q).forEach(x=>{x.classList.remove('active');x.setAttribute('aria-pressed','false')});b.classList.add('active');b.setAttribute('aria-pressed','true')}
