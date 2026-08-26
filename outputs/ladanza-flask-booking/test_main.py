@@ -132,6 +132,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("trialOffer=source==='line'&&params.get('trial')==='1'", page)
         self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分']", page)
         self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
+        self.assertIn("const menuLabels={'チャーター 30分':'チャーター'}", page)
 
     def test_slots_default_to_a_31_day_window(self):
         response = self.client.get("/api/slots", query_string={
