@@ -168,8 +168,11 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
         "phone_hash": str(booking.get("phone_hash", "")),
         "status": "confirmed",
     }
+    description = f"講師: {booking['instructor']}\nお名前: {booking['name']}\n電話: {booking['phone']}"
+    if booking.get("email"):
+        description += f"\nメール: {booking['email']}"
     event = {"summary": f"La Danza｜{booking['menu']}｜{booking['name']}",
-             "description": f"講師: {booking['instructor']}\nお名前: {booking['name']}\n電話: {booking['phone']}\nメール: {booking['email']}",
+             "description": description,
              "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Tokyo"},
              "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Tokyo"},
              "extendedProperties": {"private": private}}
