@@ -27,18 +27,20 @@
 </main>
 <div id="bottom" class="bottom"><div class="bottom-inner"><button id="back" class="back hidden" type="button">戻る</button><button id="next" class="next" type="button" disabled>日時を選ぶ</button></div></div>
 <script>
-const menus=['個人レッスン 60分','個人レッスン 30分','無料体験 20分','初心者パック 30分','初級パック30分','サロン・グループ'];
-const teachers=['大村 尊','大村 友恵','廣瀬 裕貴'];
 const params=new URLSearchParams(location.search),source=params.get('source')==='line'?'line':'website',trialOffer=source==='line'&&params.get('trial')==='1';
+const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分'];
+const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus;
+const groupMenus=new Set(['サロン','チャーター 30分']);
+const teachers=['大村 尊','大村 友恵','廣瀬 裕貴'];
 const requestKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 let state={step:1,menu:null,teacher:null,slot:null,slots:[]};
 const $=s=>document.querySelector(s),parseDate=s=>new Date(s.length===10?s+'T00:00:00+09:00':s),fmt=d=>new Intl.DateTimeFormat('ja-JP',{month:'long',day:'numeric',weekday:'short'}).format(d),weekday=d=>new Intl.DateTimeFormat('ja-JP',{weekday:'short'}).format(d);
 const showMessage=text=>{$('#message').textContent=text;$('#message').classList.toggle('hidden',!text)};
-$('#menus').innerHTML=menus.map(m=>`<button type="button" class="card" data-menu="${m}" aria-pressed="false"><strong>${m}</strong><small>${m.includes('グループ')?'最大15名・残席表示':'マンツーマン'}</small></button>`).join('');
+$('#menus').innerHTML=menus.map(m=>`<button type="button" class="card" data-menu="${m}" aria-pressed="false"><strong>${m}</strong><small>${m==='サロン'?'定員10名・残席表示':m==='チャーター 30分'?'定員6名・残席表示':'担当講師を選択'}</small></button>`).join('');
 $('#teachers').innerHTML=teachers.map((t,i)=>`<button type="button" class="teacher" data-teacher="${t}" aria-pressed="false"><span class="avatar avatar-instructor-${i}">${t[0]}</span><strong>${t}</strong></button>`).join('');
 if(trialOffer){const trialButton=$('[data-menu="無料体験 20分"]');$('#trialOffer').classList.remove('hidden');chooseMenu('無料体験 20分');select('[data-menu]',trialButton);update()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-menu],[data-teacher],[data-slot],[data-date]');if(!b)return;if(b.dataset.menu){chooseMenu(b.dataset.menu);select('[data-menu]',b)}if(b.dataset.teacher){state.teacher=b.dataset.teacher;state.slot=null;select('[data-teacher]',b)}if(b.dataset.date){state.slot=null;showTimeSelection(b.dataset.date);select('[data-date]',b)}if(b.dataset.slot){state.slot=state.slots.find(x=>String(x.id)===b.dataset.slot);select('[data-slot]',b)}update()});
-function chooseMenu(menu){const wasGroup=state.menu==='サロン・グループ';state.menu=menu;state.slot=null;if(menu==='サロン・グループ'){state.teacher='スタジオ主催';$('#instructorArea').classList.add('hidden');document.querySelectorAll('[data-teacher]').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-pressed','false')})}else{$('#instructorArea').classList.remove('hidden');if(wasGroup)state.teacher=null}}
+function chooseMenu(menu){const wasGroup=groupMenus.has(state.menu);state.menu=menu;state.slot=null;if(groupMenus.has(menu)){state.teacher='スタジオ主催';$('#instructorArea').classList.add('hidden');document.querySelectorAll('[data-teacher]').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-pressed','false')})}else{$('#instructorArea').classList.remove('hidden');if(wasGroup)state.teacher=null}}
 function select(q,b){document.querySelectorAll(q).forEach(x=>{x.classList.remove('active');x.setAttribute('aria-pressed','false')});b.classList.add('active');b.setAttribute('aria-pressed','true')}
 function update(){if(state.step===1)$('#next').disabled=!(state.menu&&state.teacher);if(state.step===2)$('#next').disabled=!state.slot}
 async function loadSlots(){state.slot=null;state.slots=[];showMessage('');$('#dates').innerHTML='';$('#times').innerHTML='';$('#datePicker').classList.remove('hidden');$('#timePicker').classList.add('hidden');$('#slotLoading').classList.remove('hidden');$('#next').disabled=true;const q=new URLSearchParams({menu:state.menu,instructor:state.teacher,days:'31'});try{const r=await fetch('/api/slots?'+q);const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.detail||'空き状況を取得できませんでした');state.slots=body;const days=[...new Set(state.slots.map(s=>s.starts_at.slice(0,10)))];$('#dates').innerHTML=days.length?days.map(d=>{const available=state.slots.some(s=>s.starts_at.startsWith(d)&&s.available);return `<button type="button" class="date" data-date="${d}" ${available?'':'disabled'} aria-pressed="false"><small>${weekday(parseDate(d))}</small><b>${parseDate(d).getMonth()+1}/${parseDate(d).getDate()}</b><small>${available?'空きあり':'空きなし'}</small></button>`}).join(''):'<p class="lead">現在ご予約可能な枠はありません。</p>'}catch(e){showMessage(e.message+'。架空の空き枠は表示していません。時間をおいて再度お試しください。')}finally{$('#slotLoading').classList.add('hidden')}}
