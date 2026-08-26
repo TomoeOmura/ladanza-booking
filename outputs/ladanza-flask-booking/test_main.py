@@ -199,6 +199,13 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
         self.assertIn("const menuLabels={'チャーター 30分':'チャーター'}", page)
 
+        admin_response = self.client.get("/admin")
+        admin = admin_response.get_data(as_text=True)
+        admin_response.close()
+        self.assertIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','サロン','チャーター']", admin)
+        self.assertNotIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','スタジオ主催']", admin)
+        self.assertIn("const menuLabels={'チャーター 30分':'チャーター'}", admin)
+
     def test_slots_default_to_a_31_day_window(self):
         response = self.client.get("/api/slots", query_string={
             "menu": "個人レッスン 30分", "instructor": "大村 尊"
@@ -278,6 +285,21 @@ class BookingApiTests(unittest.TestCase):
             instructor="大村 尊", menu="チャーター 30分", start=self._future_start(11)))
         self.assertEqual(wrong_instructor.status_code, 400)
 
+    def test_salon_and_charter_use_separate_admin_schedules(self):
+        start = datetime.fromisoformat(self._future_start(10))
+        day = str(start.weekday())
+        self.saved_settings["instructor_slots"]["サロン"][day] = []
+        self.saved_settings["instructor_slots"]["チャーター"][day] = ["10:00"]
+        main._settings_cache = None
+
+        salon = self.client.post("/api/bookings", json=self._payload(
+            instructor="スタジオ主催", menu="サロン", start=start.isoformat()))
+        charter = self.client.post("/api/bookings", json=self._payload(
+            instructor="スタジオ主催", menu="チャーター 30分", start=start.isoformat()))
+
+        self.assertEqual(salon.status_code, 400)
+        self.assertEqual(charter.status_code, 201)
+
     def test_confirmation_and_cancellation_survive_without_sqlite(self):
         created = self.client.post("/api/bookings", json=self._payload()).get_json()
         token = parse_qs(urlparse(created["reservation_url"]).query)["token"][0]
@@ -346,6 +368,29 @@ class BookingApiTests(unittest.TestCase):
         self.assertEqual(migrated["menus"]["サロン"]["capacity"], 10)
         self.assertEqual(migrated["menus"]["チャーター 30分"]["capacity"], 6)
         self.assertNotIn("サロン・グループ", migrated["menus"])
+
+    def test_legacy_studio_schedule_is_copied_to_salon_and_charter(self):
+        legacy = deepcopy(main.DEFAULT_SETTINGS)
+        weekly = deepcopy(main.DEFAULT_WEEKLY_SLOTS)
+        weekly["0"] = ["18:00", "18:30"]
+        legacy["instructor_slots"] = {
+            "大村 尊": deepcopy(main.DEFAULT_WEEKLY_SLOTS),
+            "大村 友恵": deepcopy(main.DEFAULT_WEEKLY_SLOTS),
+            "廣瀬 裕貴": deepcopy(main.DEFAULT_WEEKLY_SLOTS),
+            "スタジオ主催": weekly,
+        }
+        legacy["date_overrides"] = {
+            "大村 尊": {}, "大村 友恵": {}, "廣瀬 裕貴": {},
+            "スタジオ主催": {"2030-01-07": ["19:00"]},
+        }
+
+        migrated = main.normalize_settings(legacy)
+
+        self.assertEqual(migrated["instructor_slots"]["サロン"]["0"], ["18:00", "18:30"])
+        self.assertEqual(migrated["instructor_slots"]["チャーター"]["0"], ["18:00", "18:30"])
+        self.assertEqual(migrated["date_overrides"]["サロン"]["2030-01-07"], ["19:00"])
+        self.assertEqual(migrated["date_overrides"]["チャーター"]["2030-01-07"], ["19:00"])
+        self.assertNotIn("スタジオ主催", migrated["instructor_slots"])
 
     def test_admin_has_no_default_password(self):
         self.assertEqual(self.client.get("/api/admin/settings").status_code, 401)
