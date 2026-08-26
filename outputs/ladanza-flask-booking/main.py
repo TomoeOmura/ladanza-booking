@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 
+from line_notification import send_line_admin_notification
 from google_calendar import (
     calendar_for,
     cancel_booking_event,
@@ -44,13 +45,17 @@ DEFAULT_MENUS = {
 }
 TIME_SLOTS = [f"{hour:02d}:{minute:02d}" for hour in range(10, 22) for minute in (0, 30)]
 DEFAULT_WEEKLY_SLOTS = {str(day): (TIME_SLOTS.copy() if day < 6 else []) for day in range(7)}
-INSTRUCTORS = ["大村 尊", "大村 友恵", "廣瀬 裕貴", "スタジオ主催"]
-DEFAULT_INSTRUCTOR_SLOTS = {name: deepcopy(DEFAULT_WEEKLY_SLOTS) for name in INSTRUCTORS}
+INSTRUCTORS = ["大村 尊", "大村 友恵", "廣瀬 裕貴"]
+GROUP_SCHEDULES = ["サロン", "チャーター"]
+SCHEDULES = INSTRUCTORS + GROUP_SCHEDULES
+LEGACY_STUDIO_SCHEDULE = "スタジオ主催"
+GROUP_MENU_SCHEDULES = {"サロン": "サロン", "チャーター 30分": "チャーター"}
+DEFAULT_INSTRUCTOR_SLOTS = {name: deepcopy(DEFAULT_WEEKLY_SLOTS) for name in SCHEDULES}
 DEFAULT_SETTINGS = {
     "open_time": "10:00", "close_time": "22:00", "slot_interval": 30,
     "closed_weekdays": [6], "weekly_slots": DEFAULT_WEEKLY_SLOTS,
     "instructor_slots": DEFAULT_INSTRUCTOR_SLOTS,
-    "date_overrides": {name: {} for name in INSTRUCTORS}, "menus": DEFAULT_MENUS,
+    "date_overrides": {name: {} for name in SCHEDULES}, "menus": DEFAULT_MENUS,
 }
 
 _settings_cache: dict | None = None
@@ -125,6 +130,26 @@ def event_instructor(event: dict) -> str | None:
     return None
 
 
+def normalize_menu_name(menu: str) -> str:
+    return "チャーター 30分" if menu == "チャーター" else menu
+
+
+def schedule_for(menu: str, instructor: str) -> str:
+    return GROUP_MENU_SCHEDULES.get(normalize_menu_name(menu), instructor)
+
+
+def normalize_booking_instructor(menu: str, instructor: str) -> str:
+    schedule = GROUP_MENU_SCHEDULES.get(normalize_menu_name(menu))
+    return LEGACY_STUDIO_SCHEDULE if schedule and instructor in {schedule, LEGACY_STUDIO_SCHEDULE} else instructor
+
+
+def event_schedule(event: dict) -> str | None:
+    assigned = event_instructor(event)
+    if assigned != LEGACY_STUDIO_SCHEDULE:
+        return assigned
+    return GROUP_MENU_SCHEDULES.get(normalize_menu_name(event_private(event).get("menu", "")))
+
+
 def description_value(event: dict, label: str) -> str:
     prefix = f"{label}:"
     for line in (event.get("description") or "").splitlines():
@@ -189,8 +214,9 @@ def matching_group_event(event: dict, menu: str, instructor: str, start: datetim
     if private.get("source") != "ladanza-booking" or not event_is_active(event):
         return False
     event_start, _ = event_window(event)
-    return (private.get("booking_kind") == "group" and private.get("menu") == menu
-            and event_instructor(event) == instructor and event_start == start)
+    return (private.get("booking_kind") == "group"
+            and normalize_menu_name(private.get("menu", "")) == normalize_menu_name(menu)
+            and event_schedule(event) == instructor and event_start == start)
 
 
 def event_blocks(event: dict, instructor: str, start: datetime, end: datetime,
@@ -200,7 +226,7 @@ def event_blocks(event: dict, instructor: str, start: datetime, end: datetime,
     other_start, other_end = event_window(event)
     if not overlaps(start, end, other_start, other_end):
         return False
-    assigned = event_instructor(event)
+    assigned = event_schedule(event)
     if assigned and assigned != instructor:
         return False
     if group_menu and matching_group_event(event, group_menu, instructor, start):
@@ -213,10 +239,18 @@ def normalize_settings(settings: dict) -> dict:
     if "weekly_slots" not in settings:
         closed = settings.get("closed_weekdays", [6])
         settings["weekly_slots"] = {str(day): (TIME_SLOTS.copy() if day not in closed else []) for day in range(7)}
-    if "instructor_slots" not in settings:
-        settings["instructor_slots"] = {name: deepcopy(settings["weekly_slots"]) for name in INSTRUCTORS}
-    if "date_overrides" not in settings:
-        settings["date_overrides"] = {name: {} for name in INSTRUCTORS}
+    stored_slots = settings.get("instructor_slots", {})
+    legacy_slots = stored_slots.get(LEGACY_STUDIO_SCHEDULE, settings["weekly_slots"])
+    settings["instructor_slots"] = {
+        name: deepcopy(stored_slots.get(name, legacy_slots if name in GROUP_SCHEDULES else settings["weekly_slots"]))
+        for name in SCHEDULES
+    }
+    stored_overrides = settings.get("date_overrides", {})
+    legacy_overrides = stored_overrides.get(LEGACY_STUDIO_SCHEDULE, {})
+    settings["date_overrides"] = {
+        name: deepcopy(stored_overrides.get(name, legacy_overrides if name in GROUP_SCHEDULES else {}))
+        for name in SCHEDULES
+    }
     stored_menus = settings.get("menus", {})
     if "初級パック 30分" not in stored_menus and "初級パック30分" in stored_menus:
         stored_menus["初級パック 30分"] = stored_menus["初級パック30分"]
@@ -225,6 +259,8 @@ def normalize_settings(settings: dict) -> dict:
             "duration": stored_menus["サロン・グループ"].get("duration", 30),
             "capacity": 10,
         }
+    if "チャーター 30分" not in stored_menus and "チャーター" in stored_menus:
+        stored_menus["チャーター 30分"] = deepcopy(stored_menus["チャーター"])
     settings["menus"] = {
         name: deepcopy(stored_menus.get(name, defaults))
         for name, defaults in DEFAULT_MENUS.items()
@@ -237,7 +273,7 @@ def get_settings(force: bool = False) -> dict:
     now = datetime.now(JST)
     if not force and _settings_cache is not None and _settings_cache_until and now < _settings_cache_until:
         return deepcopy(_settings_cache)
-    stored = load_calendar_settings(calendar_for("スタジオ主催"))
+    stored = load_calendar_settings(calendar_for("サロン"))
     _settings_cache = normalize_settings(stored or DEFAULT_SETTINGS)
     _settings_cache_until = now + timedelta(seconds=60)
     return deepcopy(_settings_cache)
@@ -245,7 +281,7 @@ def get_settings(force: bool = False) -> dict:
 
 def set_settings(settings: dict) -> None:
     global _settings_cache, _settings_cache_until
-    save_calendar_settings(calendar_for("スタジオ主催"), settings)
+    save_calendar_settings(calendar_for("サロン"), settings)
     _settings_cache = deepcopy(settings)
     _settings_cache_until = datetime.now(JST) + timedelta(seconds=60)
 
@@ -331,13 +367,15 @@ def slots():
     except Exception:
         app.logger.exception("Calendar-backed settings lookup failed")
         return jsonify({"detail": "予約設定を取得できません。時間をおいてお試しください"}), 503
-    instructor = request.args.get("instructor") or "スタジオ主催"
-    menu_name = request.args.get("menu") or ("サロン" if instructor == "スタジオ主催" else "個人レッスン 30分")
+    instructor = request.args.get("instructor") or LEGACY_STUDIO_SCHEDULE
+    menu_name = normalize_menu_name(request.args.get("menu") or ("サロン" if instructor == LEGACY_STUDIO_SCHEDULE else "個人レッスン 30分"))
+    instructor = normalize_booking_instructor(menu_name, instructor)
+    schedule = schedule_for(menu_name, instructor)
     menu = settings["menus"].get(menu_name)
-    if not menu or instructor not in INSTRUCTORS:
+    if not menu or (instructor not in INSTRUCTORS and instructor != LEGACY_STUDIO_SCHEDULE):
         return jsonify({"detail": "メニューまたは講師が正しくありません"}), 400
-    is_group = int(menu["capacity"]) > 1
-    if (is_group and instructor != "スタジオ主催") or (not is_group and instructor == "スタジオ主催"):
+    is_group = menu_name in GROUP_MENU_SCHEDULES
+    if (is_group and instructor != LEGACY_STUDIO_SCHEDULE) or (not is_group and instructor not in INSTRUCTORS):
         return jsonify({"detail": "メニューと講師の組み合わせが正しくありません"}), 400
     try:
         days = min(max(int(request.args.get("days", 31)), 1), 31)
@@ -356,15 +394,15 @@ def slots():
     for offset in range(days):
         target = now.date() + timedelta(days=offset)
         closing = datetime.combine(target, closing_time, JST)
-        overrides = settings["date_overrides"].get(instructor, {})
-        labels = overrides[target.isoformat()] if target.isoformat() in overrides else settings["instructor_slots"].get(instructor, {}).get(str(target.weekday()), [])
+        overrides = settings["date_overrides"].get(schedule, {})
+        labels = overrides[target.isoformat()] if target.isoformat() in overrides else settings["instructor_slots"].get(schedule, {}).get(str(target.weekday()), [])
         for label in labels:
             cursor = datetime.combine(target, clock(label), JST)
             end = cursor + timedelta(minutes=menu["duration"])
-            if end > closing or not slot_window_enabled(cursor, menu["duration"], settings, instructor):
+            if end > closing or not slot_window_enabled(cursor, menu["duration"], settings, schedule):
                 continue
-            matching = [event for event in events if is_group and matching_group_event(event, menu_name, instructor, cursor)]
-            blocked = any(event_blocks(event, instructor, cursor, end, menu_name if is_group else None) for event in events)
+            matching = [event for event in events if is_group and matching_group_event(event, menu_name, schedule, cursor)]
+            blocked = any(event_blocks(event, schedule, cursor, end, menu_name if is_group else None) for event in events)
             booked = len(matching) if is_group else (1 if blocked else 0)
             available = cursor > now and not blocked and booked < int(menu["capacity"])
             result.append({"id": slot_id, "instructor": instructor, "starts_at": cursor.isoformat(),
@@ -386,12 +424,15 @@ def book():
     required = ("menu", "instructor", "starts_at", "name", "phone", "request_key")
     if any(not str(payload.get(key, "")).strip() for key in required):
         return jsonify({"detail": "入力項目が不足しています"}), 400
-    menu = settings["menus"].get(payload["menu"])
+    menu_name = normalize_menu_name(str(payload["menu"]).strip())
+    menu = settings["menus"].get(menu_name)
     instructor = str(payload["instructor"]).strip()
-    if not menu or instructor not in INSTRUCTORS:
+    instructor = normalize_booking_instructor(menu_name, instructor)
+    schedule = schedule_for(menu_name, instructor)
+    if not menu or (instructor not in INSTRUCTORS and instructor != LEGACY_STUDIO_SCHEDULE):
         return jsonify({"detail": "メニューまたは講師が正しくありません"}), 400
-    is_group = int(menu["capacity"]) > 1
-    if (is_group and instructor != "スタジオ主催") or (not is_group and instructor == "スタジオ主催"):
+    is_group = menu_name in GROUP_MENU_SCHEDULES
+    if (is_group and instructor != LEGACY_STUDIO_SCHEDULE) or (not is_group and instructor not in INSTRUCTORS):
         return jsonify({"detail": "メニューと講師の組み合わせが正しくありません"}), 400
     if payload.get("privacy_consent") is not True:
         return jsonify({"detail": "個人情報の取り扱いへの同意が必要です"}), 400
@@ -407,7 +448,7 @@ def book():
     except (TypeError, ValueError):
         return jsonify({"detail": "日時が正しくありません"}), 400
     end = start + timedelta(minutes=menu["duration"])
-    if (not valid_business_start(start, menu["duration"], settings, instructor)
+    if (not valid_business_start(start, menu["duration"], settings, schedule)
             or end > datetime.combine(start.date(), clock(settings["close_time"]), JST)
             or start <= datetime.now(JST)):
         return jsonify({"detail": "営業時間外、定休日、または過去の日時です"}), 400
@@ -432,13 +473,13 @@ def book():
             if already_used:
                 return jsonify({"detail": "20分無料体験はお1人様1回までです。この電話番号ではすでにご利用済みです"}), 409
         events = list_calendar_events(calendar_id, start, end)
-        matching = [event for event in events if is_group and matching_group_event(event, payload["menu"], instructor, start)]
-        if any(event_blocks(event, instructor, start, end, payload["menu"] if is_group else None) for event in events):
+        matching = [event for event in events if is_group and matching_group_event(event, menu_name, schedule, start)]
+        if any(event_blocks(event, schedule, start, end, menu_name if is_group else None) for event in events):
             return jsonify({"detail": "この講師は同じ時間帯に別の予約があります"}), 409
         if is_group and len(matching) >= int(menu["capacity"]):
             return jsonify({"detail": "この回は満員です"}), 409
         consent_at = datetime.now(JST).isoformat()
-        event_payload = {"menu": payload["menu"], "instructor": instructor, "name": name,
+        event_payload = {"menu": menu_name, "instructor": instructor, "name": name,
                          "phone": phone, "capacity": menu["capacity"],
                          "duration": menu["duration"], "booking_id": reservation_number(event_id),
                          "request_key_hash": request_hash, "token_hash": token_digest(token),
@@ -455,6 +496,23 @@ def book():
         app.logger.exception("Google Calendar booking registration failed")
         return jsonify({"detail": "予約を登録できませんでした。時間をおいてお試しください"}), 503
     app.logger.info("Booking confirmed event_id=%s instructor=%s start=%s", event_id, instructor, start.isoformat())
+    if source == "line":
+        try:
+            send_line_admin_notification(
+                name=name,
+                phone=phone,
+                menu=menu_name,
+                starts_at=start,
+                instructor=instructor,
+                participants=event_private(created).get("participants"),
+                reservation_number=reservation_number(event_id),
+            )
+        except Exception as exc:
+            app.logger.error(
+                "LINE admin notification failed event_id=%s error_type=%s",
+                event_id,
+                type(exc).__name__,
+            )
     return jsonify(booking_response(created, public_url, token)), 201
 
 
@@ -475,11 +533,12 @@ def admin_settings_put():
         return jsonify({"detail": "認証に失敗しました"}), 401
     payload = request.get_json(silent=True) or {}
     try:
-        instructor_slots = payload["instructor_slots"]
-        date_overrides = payload.get("date_overrides", get_settings().get("date_overrides", {}))
-        menus = payload["menus"]
+        normalized_payload = normalize_settings(payload)
+        instructor_slots = normalized_payload["instructor_slots"]
+        date_overrides = normalized_payload["date_overrides"]
+        menus = normalized_payload["menus"]
         clean_instructors = {}
-        for instructor in INSTRUCTORS:
+        for instructor in SCHEDULES:
             weekly = instructor_slots[instructor]
             clean_weekly = {}
             for day in range(7):
@@ -489,7 +548,7 @@ def admin_settings_put():
                 clean_weekly[str(day)] = sorted(set(values))
             clean_instructors[instructor] = clean_weekly
         clean_overrides = {}
-        for instructor in INSTRUCTORS:
+        for instructor in SCHEDULES:
             clean_dates = {}
             for date_key, values in date_overrides.get(instructor, {}).items():
                 date.fromisoformat(date_key)
@@ -524,14 +583,14 @@ def admin_settings_put():
 def admin_calendar_status():
     if not admin_required():
         return jsonify({"detail": "認証に失敗しました"}), 401
-    return jsonify({instructor: test_calendar_connection(calendar_for(instructor)) for instructor in INSTRUCTORS})
+    return jsonify({instructor: test_calendar_connection(calendar_for(instructor)) for instructor in SCHEDULES})
 
 
 def reservation_event(token: str) -> dict | None:
     event_id = event_id_from_token(token)
     if not event_id:
         return None
-    event = get_event(calendar_for("スタジオ主催"), event_id)
+    event = get_event(calendar_for("サロン"), event_id)
     if not event or event_private(event).get("source") != "ladanza-booking":
         return None
     stored_hash = event_private(event).get("token_hash", "")
@@ -562,7 +621,7 @@ def lookup_event(payload: dict) -> dict | None:
     if not normalized:
         return None
     booking_id, kind, value = normalized
-    event = find_booking_by_number(calendar_for("スタジオ主催"), booking_id)
+    event = find_booking_by_number(calendar_for("サロン"), booking_id)
     if not event or not lookup_contact_matches(event, kind, value):
         return None
     return event
@@ -589,7 +648,7 @@ def reservation_lookup_all():
         return jsonify({"detail": "電話番号を確認してください"}), 400
     try:
         events = find_bookings_by_phone_hash(
-            calendar_for("スタジオ主催"), contact_digest("phone", phone)
+            calendar_for("サロン"), contact_digest("phone", phone)
         )
     except Exception:
         app.logger.exception("Reservation phone lookup failed")
@@ -608,7 +667,7 @@ def reservation_lookup_cancel():
         if not event:
             return jsonify({"detail": "予約番号または連絡先が一致しません"}), 404
         if event_private(event).get("status", "confirmed") != "cancelled":
-            cancel_booking_event(calendar_for("スタジオ主催"), event)
+            cancel_booking_event(calendar_for("サロン"), event)
     except Exception:
         app.logger.exception("Google Calendar lookup cancellation failed")
         return jsonify({"detail": "キャンセル処理を完了できませんでした。La Danzaへお問い合わせください"}), 503
@@ -622,7 +681,7 @@ def cancel(token):
         if not event:
             return jsonify({"detail": "予約が見つかりません"}), 404
         if event_private(event).get("status", "confirmed") != "cancelled":
-            cancel_booking_event(calendar_for("スタジオ主催"), event)
+            cancel_booking_event(calendar_for("サロン"), event)
     except Exception:
         app.logger.exception("Google Calendar cancellation failed")
         return jsonify({"detail": "キャンセル処理を完了できませんでした。La Danzaへお問い合わせください"}), 503

@@ -4,12 +4,13 @@ La Danza Dance Studioの予約画面・講師別予約枠管理・Googleカレ�
 
 ## 予約ルール
 
-- 講師：大村 尊、大村 友恵、廣瀬 裕貴、スタジオ主催
-- 通常メニュー：個人レッスン60分・30分、初心者パック30分、初級パック30分、サロン、チャーター30分
+- 講師：大村 尊、大村 友恵、廣瀬 裕貴
+- 通常メニュー：個人レッスン60分・30分、初心者パック30分、初級パック30分、サロン、チャーター
 - LINE友だち追加専用メニュー：無料体験20分（電話番号ごとに1回）
 - 3名の講師は、同じ時刻に別々の予約を受けられます。
 - 同じ講師の時間が重なる予約は受け付けません。
-- サロンは同じ回に10名、チャーター30分は同じ回に6名まで受け付けます。
+- サロンは同じ回に10名、チャーターは同じ回に6名まで受け付けます。
+- サロンとチャーターは、管理画面でそれぞれ独立した予約枠を設定します。
 - GoogleカレンダーはLa Danza共通の1個を使用します。アプリが作成する予定には担当講師情報を付け、講師別に重複を判定します。
 - 講師情報が付いていないGoogleカレンダー予定は、スタジオ全体の休業・使用不可時間として全講師を停止します。
 
@@ -30,9 +31,11 @@ GOOGLE_CREDENTIALS_FILE=/etc/secrets/credentials.json
 GOOGLE_CALENDAR_ID=La Danza共通カレンダーID
 PUBLIC_URL=https://公開するRender URL
 ADMIN_TOKEN=十分に長い管理パスワード
+LINE_CHANNEL_ACCESS_TOKEN=LINE Messaging APIのチャネルアクセストークン
+LINE_ADMIN_USER_ID=通知先となる管理者のLINEユーザーID
 ```
 
-`ADMIN_TOKEN` はチャット、GitHub、メールへ貼り付けないでください。
+`ADMIN_TOKEN`、LINEのチャネルアクセストークン、管理者ユーザーIDは、チャット、GitHub、メールへ貼り付けないでください。
 
 ## Google Cloud / Googleカレンダー
 
@@ -48,6 +51,12 @@ ADMIN_TOKEN=十分に長い管理パスワード
 - Build Command：`pip install -r requirements.txt`
 - Start Command：`gunicorn main:app`
 - Health Check Path：`/health`
+
+Renderの対象サービスで「Environment」を開き、`LINE_CHANNEL_ACCESS_TOKEN`と
+`LINE_ADMIN_USER_ID`をSecretとして追加します。Messaging APIチャネルにはプッシュ
+メッセージを送信できるチャネルアクセストークンを設定し、通知先には管理者本人の
+ユーザーIDを設定してください。どちらかが未設定の場合は通知を省略しますが、予約と
+Googleカレンダー登録は通常どおり完了します。
 
 予約情報と管理設定はGoogleカレンダーへ保存するため、Renderの永続ディスクと有料インスタンスは不要です。無料インスタンスは15分間アクセスがないと休止し、次回の初回表示に時間がかかる場合があります。
 

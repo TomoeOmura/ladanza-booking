@@ -184,7 +184,12 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
         "instructor": booking["instructor"],
         "menu": booking["menu"],
         "starts_at": start.isoformat(),
-        "booking_kind": "group" if int(booking.get("capacity", 1)) > 1 else "private",
+        "booking_kind": (
+            "group"
+            if booking.get("instructor") in {"サロン", "チャーター", "スタジオ主催"}
+            or int(booking.get("capacity", 1)) > 1
+            else "private"
+        ),
         "booking_id": str(booking.get("booking_id", "")),
         "request_key_hash": str(booking.get("request_key_hash", "")),
         "token_hash": str(booking.get("token_hash", "")),
