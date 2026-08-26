@@ -16,11 +16,11 @@
   <section id="search">
     <p class="eyebrow">Reservation lookup</p>
     <h1>ご予約内容を<br>確認する</h1>
-    <p class="lead">予約完了時に表示された予約番号と、予約時に入力した電話番号またはメールアドレスをご入力ください。</p>
+    <p class="lead">予約完了時に表示された予約番号と、予約時に入力した電話番号をご入力ください。</p>
     <div id="message" class="message hidden" role="alert"></div>
     <form id="form">
       <div class="field"><label for="reservationNumber">予約番号</label><input id="reservationNumber" name="reservation_number" type="text" required maxlength="11" autocomplete="off" placeholder="LD-1234ABCD"></div>
-      <div class="field"><label for="contact">予約時の電話番号またはメールアドレス</label><input id="contact" name="contact" type="text" required maxlength="254" autocomplete="email" placeholder="070-1234-5678 または you@example.com"></div>
+      <div class="field"><label for="contact">予約時の電話番号</label><input id="contact" name="contact" type="tel" inputmode="tel" required maxlength="20" autocomplete="tel" placeholder="070-1234-5678"></div>
       <button id="submit" class="primary" type="submit">予約内容を確認する</button>
     </form>
     <a class="secondary" href="/">新しく予約する</a>
