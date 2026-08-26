@@ -130,6 +130,8 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("日付を選び直す", page)
         self.assertIn("LINE友だち追加特典：20分無料体験（お1人様1回）", page)
         self.assertIn("trialOffer=source==='line'&&params.get('trial')==='1'", page)
+        self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分']", page)
+        self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
 
     def test_slots_default_to_a_31_day_window(self):
         response = self.client.get("/api/slots", query_string={
@@ -182,17 +184,33 @@ class BookingApiTests(unittest.TestCase):
         self.assertEqual(len(self.events), 1)
 
     def test_group_capacity_is_enforced(self):
-        self.saved_settings["menus"]["サロン・グループ"]["capacity"] = 2
+        self.saved_settings["menus"]["サロン"]["capacity"] = 2
         main._settings_cache = None
         start = self._future_start()
         for _ in range(2):
             response = self.client.post("/api/bookings", json=self._payload(
-                instructor="スタジオ主催", menu="サロン・グループ", start=start))
+                instructor="スタジオ主催", menu="サロン", start=start))
             self.assertEqual(response.status_code, 201)
         full = self.client.post("/api/bookings", json=self._payload(
-            instructor="スタジオ主催", menu="サロン・グループ", start=start))
+            instructor="スタジオ主催", menu="サロン", start=start))
         self.assertEqual(full.status_code, 409)
         self.assertIn("満員", full.get_json()["detail"])
+
+    def test_charter_uses_studio_schedule_and_capacity_six(self):
+        start = self._future_start()
+        for index in range(6):
+            response = self.client.post("/api/bookings", json=self._payload(
+                instructor="スタジオ主催", menu="チャーター 30分", start=start,
+                phone=f"070-0000-{index:04d}"))
+            self.assertEqual(response.status_code, 201)
+        full = self.client.post("/api/bookings", json=self._payload(
+            instructor="スタジオ主催", menu="チャーター 30分", start=start,
+            phone="070-0000-9999"))
+        self.assertEqual(full.status_code, 409)
+        self.assertIn("満員", full.get_json()["detail"])
+        wrong_instructor = self.client.post("/api/bookings", json=self._payload(
+            instructor="大村 尊", menu="チャーター 30分", start=self._future_start(11)))
+        self.assertEqual(wrong_instructor.status_code, 400)
 
     def test_confirmation_and_cancellation_survive_without_sqlite(self):
         created = self.client.post("/api/bookings", json=self._payload()).get_json()
@@ -245,10 +263,23 @@ class BookingApiTests(unittest.TestCase):
         response = self.client.get("/api/admin/settings", headers=headers)
         self.assertEqual(response.status_code, 200)
         settings = response.get_json()
-        settings["menus"]["サロン・グループ"]["capacity"] = 12
+        settings["menus"]["サロン"]["capacity"] = 9
         saved = self.client.put("/api/admin/settings", headers=headers, json=settings)
         self.assertEqual(saved.status_code, 200)
-        self.assertEqual(self.saved_settings["menus"]["サロン・グループ"]["capacity"], 12)
+        self.assertEqual(self.saved_settings["menus"]["サロン"]["capacity"], 9)
+
+    def test_legacy_menu_settings_are_migrated(self):
+        legacy = deepcopy(main.DEFAULT_SETTINGS)
+        legacy["menus"].pop("初級パック 30分")
+        legacy["menus"].pop("サロン")
+        legacy["menus"].pop("チャーター 30分")
+        legacy["menus"]["初級パック30分"] = {"duration": 30, "capacity": 1}
+        legacy["menus"]["サロン・グループ"] = {"duration": 30, "capacity": 15}
+        migrated = main.normalize_settings(legacy)
+        self.assertEqual(migrated["menus"]["初級パック 30分"]["duration"], 30)
+        self.assertEqual(migrated["menus"]["サロン"]["capacity"], 10)
+        self.assertEqual(migrated["menus"]["チャーター 30分"]["capacity"], 6)
+        self.assertNotIn("サロン・グループ", migrated["menus"])
 
     def test_admin_has_no_default_password(self):
         self.assertEqual(self.client.get("/api/admin/settings").status_code, 401)
