@@ -134,6 +134,22 @@ def get_event(calendar_id: str, event_id: str) -> dict | None:
         raise
 
 
+def find_booking_by_number(calendar_id: str, booking_id: str) -> dict | None:
+    """Find one app-created booking by its public reservation number."""
+    response = service().events().list(
+        calendarId=calendar_id,
+        privateExtendedProperty=f"booking_id={booking_id}",
+        singleEvents=True,
+        showDeleted=False,
+        maxResults=2,
+    ).execute()
+    for event in response.get("items", []):
+        private = event.get("extendedProperties", {}).get("private", {})
+        if private.get("source") == "ladanza-booking" and private.get("booking_id") == booking_id:
+            return event
+    return None
+
+
 def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict, event_id: str | None = None) -> dict:
     private = {
         "source": "ladanza-booking",
@@ -148,6 +164,8 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
         "capacity": str(booking.get("capacity", 1)),
         "privacy_consent_at": str(booking.get("privacy_consent_at", "")),
         "booking_source": str(booking.get("source", "website")),
+        "email_hash": str(booking.get("email_hash", "")),
+        "phone_hash": str(booking.get("phone_hash", "")),
         "status": "confirmed",
     }
     event = {"summary": f"La Danza｜{booking['menu']}｜{booking['name']}",
