@@ -1,8 +1,9 @@
+import json
 import os
 import unittest
 from copy import deepcopy
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,7 @@ os.environ["PUBLIC_URL"] = "https://booking.example.com"
 os.environ["ADMIN_TOKEN"] = "test-admin-password-that-is-not-used-in-production"
 
 import main  # noqa: E402
+import line_notification  # noqa: E402
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -99,11 +101,74 @@ class BookingApiTests(unittest.TestCase):
         return datetime(target.year, target.month, target.day, hour, minute, tzinfo=JST).isoformat()
 
     def _payload(self, *, instructor="大村 尊", menu="個人レッスン 30分", request_key=None, start=None,
-                 phone="070-3148-7791"):
+                 phone="070-3148-7791", source="website", participants=None):
         return {"menu": menu, "instructor": instructor, "starts_at": start or self._future_start(),
                 "name": "予約 テスト", "phone": phone,
-                "privacy_consent": True, "source": "website",
+                "privacy_consent": True, "source": source, "participants": participants,
                 "request_key": request_key or f"request-key-{os.urandom(16).hex()}"}
+
+    def test_line_booking_sends_admin_notification(self):
+        with patch.object(main, "send_line_admin_notification") as notify:
+            response = self.client.post("/api/bookings", json=self._payload(source="line"))
+
+        self.assertEqual(response.status_code, 201)
+        notify.assert_called_once()
+
+    def test_website_booking_does_not_send_admin_notification(self):
+        with patch.object(main, "send_line_admin_notification") as notify:
+            response = self.client.post("/api/bookings", json=self._payload(source="website"))
+
+        self.assertEqual(response.status_code, 201)
+        notify.assert_not_called()
+
+    def test_booking_succeeds_without_line_environment(self):
+        with patch.dict(os.environ, {
+            "LINE_CHANNEL_ACCESS_TOKEN": "",
+            "LINE_ADMIN_USER_ID": "",
+        }), patch.object(line_notification, "urlopen") as urlopen:
+            response = self.client.post("/api/bookings", json=self._payload(source="line"))
+
+        self.assertEqual(response.status_code, 201)
+        urlopen.assert_not_called()
+
+    def test_booking_succeeds_when_line_api_fails(self):
+        with patch.object(
+            main, "send_line_admin_notification", side_effect=RuntimeError("LINE API failed")
+        ):
+            response = self.client.post("/api/bookings", json=self._payload(source="line"))
+
+        self.assertEqual(response.status_code, 201)
+
+    def test_line_notification_contains_booking_details(self):
+        starts_at = datetime(2030, 1, 7, 14, 30, tzinfo=JST)
+        token = os.urandom(24).hex()
+        admin_user_id = os.urandom(16).hex()
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"{}"
+        with patch.dict(os.environ, {
+            "LINE_CHANNEL_ACCESS_TOKEN": token,
+            "LINE_ADMIN_USER_ID": admin_user_id,
+        }), patch.object(line_notification, "urlopen", return_value=response) as urlopen:
+            sent = line_notification.send_line_admin_notification(
+                name="予約 テスト",
+                phone="07031487791",
+                menu="サロン",
+                starts_at=starts_at,
+                instructor="スタジオ主催",
+                participants=3,
+                reservation_number="LD-1234ABCD",
+            )
+
+        self.assertTrue(sent)
+        request = urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        message = body["messages"][0]["text"]
+        for expected in (
+            "新規予約", "予約 テスト", "07031487791", "サロン",
+            "2030年01月07日 14:30", "スタジオ主催", "参加人数: 3名", "LD-1234ABCD",
+        ):
+            self.assertIn(expected, message)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], line_notification.LINE_API_TIMEOUT_SECONDS)
 
     def test_public_pages_and_health(self):
         health = self.client.get("/health")
@@ -132,6 +197,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("trialOffer=source==='line'&&params.get('trial')==='1'", page)
         self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分']", page)
         self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
+        self.assertIn("const menuLabels={'チャーター 30分':'チャーター'}", page)
 
     def test_slots_default_to_a_31_day_window(self):
         response = self.client.get("/api/slots", query_string={

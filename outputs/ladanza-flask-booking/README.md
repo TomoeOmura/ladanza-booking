@@ -30,9 +30,11 @@ GOOGLE_CREDENTIALS_FILE=/etc/secrets/credentials.json
 GOOGLE_CALENDAR_ID=La Danza共通カレンダーID
 PUBLIC_URL=https://公開するRender URL
 ADMIN_TOKEN=十分に長い管理パスワード
+LINE_CHANNEL_ACCESS_TOKEN=LINE Messaging APIのチャネルアクセストークン
+LINE_ADMIN_USER_ID=通知先となる管理者のLINEユーザーID
 ```
 
-`ADMIN_TOKEN` はチャット、GitHub、メールへ貼り付けないでください。
+`ADMIN_TOKEN`、LINEのチャネルアクセストークン、管理者ユーザーIDは、チャット、GitHub、メールへ貼り付けないでください。
 
 ## Google Cloud / Googleカレンダー
 
@@ -48,6 +50,12 @@ ADMIN_TOKEN=十分に長い管理パスワード
 - Build Command：`pip install -r requirements.txt`
 - Start Command：`gunicorn main:app`
 - Health Check Path：`/health`
+
+Renderの対象サービスで「Environment」を開き、`LINE_CHANNEL_ACCESS_TOKEN`と
+`LINE_ADMIN_USER_ID`をSecretとして追加します。Messaging APIチャネルにはプッシュ
+メッセージを送信できるチャネルアクセストークンを設定し、通知先には管理者本人の
+ユーザーIDを設定してください。どちらかが未設定の場合は通知を省略しますが、予約と
+Googleカレンダー登録は通常どおり完了します。
 
 予約情報と管理設定はGoogleカレンダーへ保存するため、Renderの永続ディスクと有料インスタンスは不要です。無料インスタンスは15分間アクセスがないと休止し、次回の初回表示に時間がかかる場合があります。
 
