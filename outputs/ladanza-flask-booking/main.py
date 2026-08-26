@@ -38,8 +38,9 @@ DEFAULT_MENUS = {
     "個人レッスン 30分": {"duration": 30, "capacity": 1},
     "無料体験 20分": {"duration": 20, "capacity": 1},
     "初心者パック 30分": {"duration": 30, "capacity": 1},
-    "初級パック30分": {"duration": 30, "capacity": 1},
-    "サロン・グループ": {"duration": 30, "capacity": 15},
+    "初級パック 30分": {"duration": 30, "capacity": 1},
+    "サロン": {"duration": 30, "capacity": 10},
+    "チャーター 30分": {"duration": 30, "capacity": 6},
 }
 TIME_SLOTS = [f"{hour:02d}:{minute:02d}" for hour in range(10, 22) for minute in (0, 30)]
 DEFAULT_WEEKLY_SLOTS = {str(day): (TIME_SLOTS.copy() if day < 6 else []) for day in range(7)}
@@ -216,6 +217,18 @@ def normalize_settings(settings: dict) -> dict:
         settings["instructor_slots"] = {name: deepcopy(settings["weekly_slots"]) for name in INSTRUCTORS}
     if "date_overrides" not in settings:
         settings["date_overrides"] = {name: {} for name in INSTRUCTORS}
+    stored_menus = settings.get("menus", {})
+    if "初級パック 30分" not in stored_menus and "初級パック30分" in stored_menus:
+        stored_menus["初級パック 30分"] = stored_menus["初級パック30分"]
+    if "サロン" not in stored_menus and "サロン・グループ" in stored_menus:
+        stored_menus["サロン"] = {
+            "duration": stored_menus["サロン・グループ"].get("duration", 30),
+            "capacity": 10,
+        }
+    settings["menus"] = {
+        name: deepcopy(stored_menus.get(name, defaults))
+        for name, defaults in DEFAULT_MENUS.items()
+    }
     return settings
 
 
@@ -319,7 +332,7 @@ def slots():
         app.logger.exception("Calendar-backed settings lookup failed")
         return jsonify({"detail": "予約設定を取得できません。時間をおいてお試しください"}), 503
     instructor = request.args.get("instructor") or "スタジオ主催"
-    menu_name = request.args.get("menu") or ("サロン・グループ" if instructor == "スタジオ主催" else "個人レッスン 30分")
+    menu_name = request.args.get("menu") or ("サロン" if instructor == "スタジオ主催" else "個人レッスン 30分")
     menu = settings["menus"].get(menu_name)
     if not menu or instructor not in INSTRUCTORS:
         return jsonify({"detail": "メニューまたは講師が正しくありません"}), 400
