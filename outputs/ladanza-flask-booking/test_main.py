@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 os.environ["GOOGLE_CALENDAR_ID"] = "shared-calendar@example.com"
 os.environ["PUBLIC_URL"] = "https://booking.example.com"
 os.environ["ADMIN_TOKEN"] = "test-admin-password-that-is-not-used-in-production"
-os.environ["TOKEN_SECRET"] = "test-token-secret-with-more-than-32-characters"
 
 import main  # noqa: E402
 
@@ -149,6 +148,12 @@ class BookingApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/reservations/{token}").status_code, 200)
         self.assertEqual(self.client.post(f"/api/reservations/{token}/cancel").status_code, 200)
         self.assertEqual(self.client.get(f"/api/reservations/{token}").get_json()["status"], "cancelled")
+
+    def test_tampered_reservation_token_is_rejected(self):
+        created = self.client.post("/api/bookings", json=self._payload()).get_json()
+        token = parse_qs(urlparse(created["reservation_url"]).query)["token"][0]
+        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        self.assertEqual(self.client.get(f"/api/reservations/{tampered}").status_code, 404)
 
     def test_admin_settings_are_saved_to_calendar(self):
         headers = {"X-Admin-Token": os.environ["ADMIN_TOKEN"]}

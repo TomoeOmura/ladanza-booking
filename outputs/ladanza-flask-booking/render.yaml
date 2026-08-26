@@ -16,5 +16,3 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         sync: false
-      - key: TOKEN_SECRET
-        sync: false

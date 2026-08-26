@@ -29,10 +29,9 @@ GOOGLE_CREDENTIALS_FILE=/etc/secrets/credentials.json
 GOOGLE_CALENDAR_ID=La Danza共通カレンダーID
 PUBLIC_URL=https://公開するRender URL
 ADMIN_TOKEN=十分に長い管理パスワード
-TOKEN_SECRET=32文字以上のランダムな秘密文字列
 ```
 
-`ADMIN_TOKEN` と `TOKEN_SECRET` は同じ値にしないでください。チャット、GitHub、メールへ貼り付けないでください。
+`ADMIN_TOKEN` はチャット、GitHub、メールへ貼り付けないでください。
 
 ## Google Cloud / Googleカレンダー
 

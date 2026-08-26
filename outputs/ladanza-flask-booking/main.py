@@ -54,20 +54,13 @@ _settings_cache: dict | None = None
 _settings_cache_until: datetime | None = None
 
 
-def token_secret() -> str:
-    secret = os.getenv("TOKEN_SECRET", "")
-    if len(secret) < 32:
-        raise RuntimeError("TOKEN_SECRET must contain at least 32 characters")
-    return secret
-
-
 def token_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def reservation_token(event_id: str) -> str:
-    signature = hmac.new(token_secret().encode(), event_id.encode(), hashlib.sha256).digest()
-    raw = event_id.encode() + b"." + signature
+def reservation_token(event_id: str, request_key: str) -> str:
+    """Create a repeatable opaque token from the browser's random request key."""
+    raw = event_id.encode("ascii") + b"." + request_key.encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
@@ -79,12 +72,14 @@ def event_id_from_token(token: str) -> str | None:
     try:
         padding = "=" * (-len(token) % 4)
         raw = base64.urlsafe_b64decode(token + padding)
-        event_id_bytes, signature = raw.split(b".", 1)
+        event_id_bytes, request_key_bytes = raw.split(b".", 1)
         event_id = event_id_bytes.decode("ascii")
+        request_key = request_key_bytes.decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return None
-    expected = hmac.new(token_secret().encode(), event_id.encode(), hashlib.sha256).digest()
-    return event_id if hmac.compare_digest(signature, expected) else None
+    if not re.fullmatch(r"1d[0-9a-f]{40}", event_id):
+        return None
+    return event_id if 20 <= len(request_key) <= 100 else None
 
 
 def parse_start(value: str) -> datetime:
@@ -345,7 +340,7 @@ def book():
     event_id = event_id_from_request(request_key)
     calendar_id = calendar_for(instructor)
     try:
-        token = reservation_token(event_id)
+        token = reservation_token(event_id, request_key)
         existing = get_event(calendar_id, event_id)
         if existing and event_private(existing).get("request_key_hash") == request_hash:
             return jsonify(booking_response(existing, public_url, token)), 200
@@ -445,14 +440,14 @@ def admin_calendar_status():
 
 
 def reservation_event(token: str) -> dict | None:
-    try:
-        event_id = event_id_from_token(token)
-    except RuntimeError:
-        return None
+    event_id = event_id_from_token(token)
     if not event_id:
         return None
     event = get_event(calendar_for("スタジオ主催"), event_id)
     if not event or event_private(event).get("source") != "ladanza-booking":
+        return None
+    stored_hash = event_private(event).get("token_hash", "")
+    if not stored_hash or not hmac.compare_digest(stored_hash, token_digest(token)):
         return None
     return event
 
