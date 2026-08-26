@@ -31,12 +31,13 @@ const params=new URLSearchParams(location.search),source=params.get('source')===
 const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分'];
 const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus;
 const groupMenus=new Set(['サロン','チャーター 30分']);
+const menuLabels={'チャーター 30分':'チャーター'};
 const teachers=['大村 尊','大村 友恵','廣瀬 裕貴'];
 const requestKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 let state={step:1,menu:null,teacher:null,slot:null,slots:[]};
 const $=s=>document.querySelector(s),parseDate=s=>new Date(s.length===10?s+'T00:00:00+09:00':s),fmt=d=>new Intl.DateTimeFormat('ja-JP',{month:'long',day:'numeric',weekday:'short'}).format(d),weekday=d=>new Intl.DateTimeFormat('ja-JP',{weekday:'short'}).format(d);
 const showMessage=text=>{$('#message').textContent=text;$('#message').classList.toggle('hidden',!text)};
-$('#menus').innerHTML=menus.map(m=>`<button type="button" class="card" data-menu="${m}" aria-pressed="false"><strong>${m}</strong><small>${m==='サロン'?'定員10名・残席表示':m==='チャーター 30分'?'定員6名・残席表示':'担当講師を選択'}</small></button>`).join('');
+$('#menus').innerHTML=menus.map(m=>`<button type="button" class="card" data-menu="${m}" aria-pressed="false"><strong>${menuLabels[m]||m}</strong><small>${m==='サロン'?'定員10名・残席表示':m==='チャーター 30分'?'定員6名・残席表示':'担当講師を選択'}</small></button>`).join('');
 $('#teachers').innerHTML=teachers.map((t,i)=>`<button type="button" class="teacher" data-teacher="${t}" aria-pressed="false"><span class="avatar avatar-instructor-${i}">${t[0]}</span><strong>${t}</strong></button>`).join('');
 if(trialOffer){const trialButton=$('[data-menu="無料体験 20分"]');$('#trialOffer').classList.remove('hidden');chooseMenu('無料体験 20分');select('[data-menu]',trialButton);update()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-menu],[data-teacher],[data-slot],[data-date]');if(!b)return;if(b.dataset.menu){chooseMenu(b.dataset.menu);select('[data-menu]',b)}if(b.dataset.teacher){state.teacher=b.dataset.teacher;state.slot=null;select('[data-teacher]',b)}if(b.dataset.date){state.slot=null;showTimeSelection(b.dataset.date);select('[data-date]',b)}if(b.dataset.slot){state.slot=state.slots.find(x=>String(x.id)===b.dataset.slot);select('[data-slot]',b)}update()});
