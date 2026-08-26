@@ -54,6 +54,7 @@ ADMIN_TOKEN=十分に長い管理パスワード
 
 - ホームページ：`https://公開URL/?source=website`
 - 公式LINE：`https://公開URL/?source=line`
+- 公式LINEの予約確認：`https://公開URL/reservation-lookup`
 - 管理画面：`https://公開URL/admin`
 
 ## ローカル確認
@@ -72,6 +73,8 @@ python main.py
 - `POST /api/bookings`
 - `GET /api/reservations/<token>`
 - `POST /api/reservations/<token>/cancel`
+- `POST /api/reservations/lookup`
+- `POST /api/reservations/lookup/cancel`
 - `GET /api/admin/settings`
 - `PUT /api/admin/settings`
 
