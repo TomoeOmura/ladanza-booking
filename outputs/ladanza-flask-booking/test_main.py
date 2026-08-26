@@ -65,11 +65,11 @@ class BookingApiTests(unittest.TestCase):
             "booking_id": booking["booking_id"], "request_key_hash": booking["request_key_hash"],
             "token_hash": booking["token_hash"], "duration": str(booking["duration"]),
             "capacity": str(booking["capacity"]), "privacy_consent_at": booking["privacy_consent_at"],
-            "booking_source": booking["source"], "email_hash": booking["email_hash"],
+            "booking_source": booking["source"], "email_hash": booking.get("email_hash", ""),
             "phone_hash": booking["phone_hash"], "status": "confirmed",
         }
         event = {"id": event_id, "summary": "test",
-                 "description": f"電話: {booking['phone']}\nメール: {booking['email']}",
+                 "description": f"電話: {booking['phone']}",
                  "start": {"dateTime": start.isoformat()}, "end": {"dateTime": end.isoformat()},
                  "extendedProperties": {"private": private}}
         self.events[event_id] = deepcopy(event)
@@ -89,7 +89,7 @@ class BookingApiTests(unittest.TestCase):
 
     def _payload(self, *, instructor="大村 尊", menu="個人レッスン 30分", request_key=None, start=None):
         return {"menu": menu, "instructor": instructor, "starts_at": start or self._future_start(),
-                "name": "予約 テスト", "phone": "070-3148-7791", "email": "guest@example.com",
+                "name": "予約 テスト", "phone": "070-3148-7791",
                 "privacy_consent": True, "source": "website",
                 "request_key": request_key or f"request-key-{os.urandom(16).hex()}"}
 
@@ -110,6 +110,8 @@ class BookingApiTests(unittest.TestCase):
         lookup.close()
         self.assertNotIn("demoSlots", page)
         self.assertIn("架空の空き枠は表示していません", page)
+        self.assertNotIn('name="email"', page)
+        self.assertNotIn("メールアドレス", page)
 
     def test_privacy_consent_is_required(self):
         payload = self._payload()
@@ -170,12 +172,12 @@ class BookingApiTests(unittest.TestCase):
 
     def test_lookup_by_reservation_number_and_contact(self):
         created = self.client.post("/api/bookings", json=self._payload()).get_json()
-        payload = {"reservation_number": created["reservation_number"], "contact": "guest@example.com"}
+        payload = {"reservation_number": created["reservation_number"], "contact": "070-3148-7791"}
         found = self.client.post("/api/reservations/lookup", json=payload)
         self.assertEqual(found.status_code, 200)
         self.assertEqual(found.get_json()["reservation_number"], created["reservation_number"])
         self.assertEqual(self.client.post("/api/reservations/lookup", json={
-            "reservation_number": created["reservation_number"], "contact": "wrong@example.com"
+            "reservation_number": created["reservation_number"], "contact": "070-0000-0000"
         }).status_code, 404)
         cancelled = self.client.post("/api/reservations/lookup/cancel", json={
             "reservation_number": created["reservation_number"], "contact": "070-3148-7791"
