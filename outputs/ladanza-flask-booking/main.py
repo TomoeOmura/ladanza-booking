@@ -402,6 +402,7 @@ def book():
     source = source if source in {"website", "line"} else "website"
     public_url = os.getenv("PUBLIC_URL", request.url_root.rstrip("/"))
     request_hash = token_digest(request_key)
+    phone_hash = contact_digest("phone", phone)
     event_id = event_id_from_request(request_key)
     calendar_id = calendar_for(instructor)
     try:
@@ -409,6 +410,14 @@ def book():
         existing = get_event(calendar_id, event_id)
         if existing and event_private(existing).get("request_key_hash") == request_hash:
             return jsonify(booking_response(existing, public_url, token)), 200
+        if payload["menu"] == "無料体験 20分":
+            previous = find_bookings_by_phone_hash(calendar_id, phone_hash, upcoming_only=False)
+            already_used = any(
+                event_is_active(event) and event_private(event).get("menu") == "無料体験 20分"
+                for event in previous
+            )
+            if already_used:
+                return jsonify({"detail": "20分無料体験はお1人様1回までです。この電話番号ではすでにご利用済みです"}), 409
         events = list_calendar_events(calendar_id, start, end)
         matching = [event for event in events if is_group and matching_group_event(event, payload["menu"], instructor, start)]
         if any(event_blocks(event, instructor, start, end, payload["menu"] if is_group else None) for event in events):
@@ -420,7 +429,7 @@ def book():
                          "phone": phone, "capacity": menu["capacity"],
                          "duration": menu["duration"], "booking_id": reservation_number(event_id),
                          "request_key_hash": request_hash, "token_hash": token_digest(token),
-                         "phone_hash": contact_digest("phone", phone),
+                         "phone_hash": phone_hash,
                          "privacy_consent_at": consent_at, "source": source}
         created = create_event(calendar_id, start, end, event_payload, event_id=event_id)
     except Exception:
