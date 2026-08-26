@@ -27,6 +27,7 @@ class BookingApiTests(unittest.TestCase):
             patch.object(main, "save_calendar_settings", side_effect=self._save_settings),
             patch.object(main, "list_calendar_events", side_effect=self._list_events),
             patch.object(main, "get_event", side_effect=lambda _calendar, event_id: deepcopy(self.events.get(event_id))),
+            patch.object(main, "find_booking_by_number", side_effect=self._find_booking),
             patch.object(main, "create_event", side_effect=self._create_event),
             patch.object(main, "cancel_booking_event", side_effect=self._cancel_event),
             patch.object(main, "test_calendar_connection", return_value={"connected": True}),
@@ -50,6 +51,12 @@ class BookingApiTests(unittest.TestCase):
                 result.append(deepcopy(event))
         return result
 
+    def _find_booking(self, _calendar, booking_id):
+        for event in self.events.values():
+            if event.get("extendedProperties", {}).get("private", {}).get("booking_id") == booking_id:
+                return deepcopy(event)
+        return None
+
     def _create_event(self, _calendar, start, end, booking, event_id=None):
         private = {
             "source": "ladanza-booking", "instructor": booking["instructor"],
@@ -58,9 +65,11 @@ class BookingApiTests(unittest.TestCase):
             "booking_id": booking["booking_id"], "request_key_hash": booking["request_key_hash"],
             "token_hash": booking["token_hash"], "duration": str(booking["duration"]),
             "capacity": str(booking["capacity"]), "privacy_consent_at": booking["privacy_consent_at"],
-            "booking_source": booking["source"], "status": "confirmed",
+            "booking_source": booking["source"], "email_hash": booking["email_hash"],
+            "phone_hash": booking["phone_hash"], "status": "confirmed",
         }
         event = {"id": event_id, "summary": "test",
+                 "description": f"電話: {booking['phone']}\nメール: {booking['email']}",
                  "start": {"dateTime": start.isoformat()}, "end": {"dateTime": end.isoformat()},
                  "extendedProperties": {"private": private}}
         self.events[event_id] = deepcopy(event)
@@ -95,6 +104,10 @@ class BookingApiTests(unittest.TestCase):
         privacy = self.client.get("/privacy")
         self.assertEqual(privacy.status_code, 200)
         privacy.close()
+        lookup = self.client.get("/reservation-lookup")
+        self.assertEqual(lookup.status_code, 200)
+        self.assertIn("予約内容を確認する", lookup.get_data(as_text=True))
+        lookup.close()
         self.assertNotIn("demoSlots", page)
         self.assertIn("架空の空き枠は表示していません", page)
 
@@ -154,6 +167,21 @@ class BookingApiTests(unittest.TestCase):
         token = parse_qs(urlparse(created["reservation_url"]).query)["token"][0]
         tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
         self.assertEqual(self.client.get(f"/api/reservations/{tampered}").status_code, 404)
+
+    def test_lookup_by_reservation_number_and_contact(self):
+        created = self.client.post("/api/bookings", json=self._payload()).get_json()
+        payload = {"reservation_number": created["reservation_number"], "contact": "guest@example.com"}
+        found = self.client.post("/api/reservations/lookup", json=payload)
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.get_json()["reservation_number"], created["reservation_number"])
+        self.assertEqual(self.client.post("/api/reservations/lookup", json={
+            "reservation_number": created["reservation_number"], "contact": "wrong@example.com"
+        }).status_code, 404)
+        cancelled = self.client.post("/api/reservations/lookup/cancel", json={
+            "reservation_number": created["reservation_number"], "contact": "070-3148-7791"
+        })
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(self.events[created["id"]]["extendedProperties"]["private"]["status"], "cancelled")
 
     def test_admin_settings_are_saved_to_calendar(self):
         headers = {"X-Admin-Token": os.environ["ADMIN_TOKEN"]}
