@@ -327,7 +327,7 @@ def slots():
     if (is_group and instructor != "スタジオ主催") or (not is_group and instructor == "スタジオ主催"):
         return jsonify({"detail": "メニューと講師の組み合わせが正しくありません"}), 400
     try:
-        days = min(max(int(request.args.get("days", 14)), 1), 31)
+        days = min(max(int(request.args.get("days", 31)), 1), 31)
     except ValueError:
         return jsonify({"detail": "表示日数が正しくありません"}), 400
     now = datetime.now(JST)
