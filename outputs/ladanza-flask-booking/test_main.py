@@ -28,6 +28,7 @@ class BookingApiTests(unittest.TestCase):
             patch.object(main, "list_calendar_events", side_effect=self._list_events),
             patch.object(main, "get_event", side_effect=lambda _calendar, event_id: deepcopy(self.events.get(event_id))),
             patch.object(main, "find_booking_by_number", side_effect=self._find_booking),
+            patch.object(main, "find_bookings_by_phone_hash", side_effect=self._find_bookings_by_phone_hash),
             patch.object(main, "create_event", side_effect=self._create_event),
             patch.object(main, "cancel_booking_event", side_effect=self._cancel_event),
             patch.object(main, "test_calendar_connection", return_value={"connected": True}),
@@ -56,6 +57,14 @@ class BookingApiTests(unittest.TestCase):
             if event.get("extendedProperties", {}).get("private", {}).get("booking_id") == booking_id:
                 return deepcopy(event)
         return None
+
+    def _find_bookings_by_phone_hash(self, _calendar, phone_hash):
+        result = []
+        for event in self.events.values():
+            private = event.get("extendedProperties", {}).get("private", {})
+            if private.get("phone_hash") == phone_hash:
+                result.append(deepcopy(event))
+        return result
 
     def _create_event(self, _calendar, start, end, booking, event_id=None):
         private = {
@@ -87,9 +96,10 @@ class BookingApiTests(unittest.TestCase):
             target += timedelta(days=1)
         return datetime(target.year, target.month, target.day, hour, minute, tzinfo=JST).isoformat()
 
-    def _payload(self, *, instructor="大村 尊", menu="個人レッスン 30分", request_key=None, start=None):
+    def _payload(self, *, instructor="大村 尊", menu="個人レッスン 30分", request_key=None, start=None,
+                 phone="070-3148-7791"):
         return {"menu": menu, "instructor": instructor, "starts_at": start or self._future_start(),
-                "name": "予約 テスト", "phone": "070-3148-7791",
+                "name": "予約 テスト", "phone": phone,
                 "privacy_consent": True, "source": "website",
                 "request_key": request_key or f"request-key-{os.urandom(16).hex()}"}
 
@@ -106,7 +116,7 @@ class BookingApiTests(unittest.TestCase):
         privacy.close()
         lookup = self.client.get("/reservation-lookup")
         self.assertEqual(lookup.status_code, 200)
-        self.assertIn("予約内容を確認する", lookup.get_data(as_text=True))
+        self.assertIn("すべての予約を確認する", lookup.get_data(as_text=True))
         lookup.close()
         self.assertNotIn("demoSlots", page)
         self.assertIn("架空の空き枠は表示していません", page)
@@ -184,6 +194,21 @@ class BookingApiTests(unittest.TestCase):
         })
         self.assertEqual(cancelled.status_code, 200)
         self.assertEqual(self.events[created["id"]]["extendedProperties"]["private"]["status"], "cancelled")
+
+    def test_lookup_all_upcoming_reservations_by_phone(self):
+        first = self.client.post("/api/bookings", json=self._payload(start=self._future_start(10))).get_json()
+        second = self.client.post("/api/bookings", json=self._payload(start=self._future_start(11))).get_json()
+        self.client.post("/api/bookings", json=self._payload(
+            start=self._future_start(12), phone="070-9999-9999"))
+        response = self.client.post("/api/reservations/lookup-all", json={"contact": "070-3148-7791"})
+        self.assertEqual(response.status_code, 200)
+        bookings = response.get_json()["bookings"]
+        self.assertEqual([item["reservation_number"] for item in bookings], [
+            first["reservation_number"], second["reservation_number"]
+        ])
+        self.assertEqual(self.client.post("/api/reservations/lookup-all", json={
+            "contact": "070-0000-0000"
+        }).status_code, 404)
 
     def test_admin_settings_are_saved_to_calendar(self):
         headers = {"X-Admin-Token": os.environ["ADMIN_TOKEN"]}
