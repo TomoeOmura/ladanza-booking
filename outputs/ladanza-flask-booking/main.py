@@ -364,7 +364,7 @@ def book():
         app.logger.exception("Calendar-backed settings lookup failed")
         return jsonify({"detail": "予約設定を取得できません。時間をおいてお試しください"}), 503
     payload = request.get_json(silent=True) or {}
-    required = ("menu", "instructor", "starts_at", "name", "phone", "email", "request_key")
+    required = ("menu", "instructor", "starts_at", "name", "phone", "request_key")
     if any(not str(payload.get(key, "")).strip() for key in required):
         return jsonify({"detail": "入力項目が不足しています"}), 400
     menu = settings["menus"].get(payload["menu"])
@@ -378,11 +378,9 @@ def book():
         return jsonify({"detail": "個人情報の取り扱いへの同意が必要です"}), 400
     name = str(payload["name"]).strip()
     phone = re.sub(r"[^0-9]", "", str(payload["phone"]))
-    email = str(payload["email"]).strip().lower()
     request_key = str(payload["request_key"]).strip()
-    if (len(name) > 80 or not re.fullmatch(r"\d{10,11}", phone) or len(email) > 254
-            or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email)):
-        return jsonify({"detail": "お名前、電話番号、メールアドレスを確認してください"}), 400
+    if len(name) > 80 or not re.fullmatch(r"\d{10,11}", phone):
+        return jsonify({"detail": "お名前と電話番号を確認してください"}), 400
     if len(request_key) < 20 or len(request_key) > 100:
         return jsonify({"detail": "予約情報を再読み込みしてください"}), 400
     try:
@@ -413,10 +411,9 @@ def book():
             return jsonify({"detail": "この回は満員です"}), 409
         consent_at = datetime.now(JST).isoformat()
         event_payload = {"menu": payload["menu"], "instructor": instructor, "name": name,
-                         "phone": phone, "email": email, "capacity": menu["capacity"],
+                         "phone": phone, "capacity": menu["capacity"],
                          "duration": menu["duration"], "booking_id": reservation_number(event_id),
                          "request_key_hash": request_hash, "token_hash": token_digest(token),
-                         "email_hash": contact_digest("email", email),
                          "phone_hash": contact_digest("phone", phone),
                          "privacy_consent_at": consent_at, "source": source}
         created = create_event(calendar_id, start, end, event_payload, event_id=event_id)
