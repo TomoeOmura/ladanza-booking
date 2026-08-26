@@ -150,21 +150,25 @@ def find_booking_by_number(calendar_id: str, booking_id: str) -> dict | None:
     return None
 
 
-def find_bookings_by_phone_hash(calendar_id: str, phone_hash: str) -> list[dict]:
-    """Return upcoming app-created bookings for one verified phone hash."""
+def find_bookings_by_phone_hash(
+    calendar_id: str, phone_hash: str, *, upcoming_only: bool = True
+) -> list[dict]:
+    """Return app-created bookings for one verified phone hash."""
     items: list[dict] = []
     page_token = None
     while True:
-        response = service().events().list(
-            calendarId=calendar_id,
-            privateExtendedProperty=f"phone_hash={phone_hash}",
-            timeMin=datetime.now(JST).isoformat(),
-            singleEvents=True,
-            showDeleted=False,
-            orderBy="startTime",
-            maxResults=100,
-            pageToken=page_token,
-        ).execute()
+        options = {
+            "calendarId": calendar_id,
+            "privateExtendedProperty": f"phone_hash={phone_hash}",
+            "singleEvents": True,
+            "showDeleted": False,
+            "maxResults": 100,
+            "pageToken": page_token,
+        }
+        if upcoming_only:
+            options["timeMin"] = datetime.now(JST).isoformat()
+            options["orderBy"] = "startTime"
+        response = service().events().list(**options).execute()
         for event in response.get("items", []):
             private = event.get("extendedProperties", {}).get("private", {})
             if private.get("source") == "ladanza-booking" and private.get("phone_hash") == phone_hash:
