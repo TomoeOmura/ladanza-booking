@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>La Danza｜予約確認</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Noto+Serif+JP:wght@500;600&display=swap');
+    :root{--green:#173f35;--mint:#e6f0eb;--ivory:#fbfaf6;--gold:#b79b62;--line:#dde2de;--error:#963e35}
+    *{box-sizing:border-box}body{margin:0;background:#f2f4f1;color:var(--green);font-family:'DM Sans',sans-serif}.shell{max-width:620px;min-height:100vh;margin:auto;padding:28px 18px 55px;background:var(--ivory)}.brand{display:inline-block;font:600 22px 'Noto Serif JP';letter-spacing:.05em;color:var(--green);text-decoration:none}.brand small{display:block;font:500 9px 'DM Sans';letter-spacing:.22em;color:#71837d}.eyebrow{margin-top:42px;color:var(--gold);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase}h1{font:600 27px/1.45 'Noto Serif JP';margin:8px 0 8px}.lead{margin:0 0 22px;color:#64756f;font-size:13px;line-height:1.8}.field{margin:15px 0}.field label{display:block;font-size:12px;margin:0 0 7px}.field input{width:100%;padding:15px;border:1px solid var(--line);border-radius:12px;background:#fff;font:inherit}.primary,.cancel{width:100%;padding:15px;border-radius:13px;font:600 14px 'DM Sans';cursor:pointer}.primary{margin-top:8px;border:0;background:var(--green);color:#fff}.primary:disabled,.cancel:disabled{opacity:.5}.message{padding:13px;border-radius:12px;background:#f7e9e6;color:var(--error);font-size:13px;line-height:1.7;margin:0 0 18px}.number{display:inline-block;padding:7px 12px;border-radius:20px;background:var(--mint);font-weight:600}.card{margin:16px 0;padding:18px;border:1px solid var(--line);border-radius:17px;background:#fff}.row{display:grid;grid-template-columns:90px 1fr;gap:13px;padding:12px 0;border-bottom:1px solid #edf0ed}.row:last-child{border:0}.row span{font-size:11px;color:#788780}.row strong{font-size:14px}.status{padding:12px;border-radius:12px;text-align:center;background:#f3e7e3;color:#8b4337;font-weight:600}.cancel{margin-top:8px;border:1px solid #b9c3bf;background:transparent;color:var(--green)}.secondary{display:block;margin-top:18px;color:var(--green);text-align:center;font-size:13px}.hidden{display:none!important}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <a class="brand" href="/" aria-label="予約画面の最初に戻る">La Danza<small>DANCE STUDIO</small></a>
+  <section id="search">
+    <p class="eyebrow">Reservation lookup</p>
+    <h1>ご予約内容を<br>確認する</h1>
+    <p class="lead">予約完了時に表示された予約番号と、予約時に入力した電話番号またはメールアドレスをご入力ください。</p>
+    <div id="message" class="message hidden" role="alert"></div>
+    <form id="form">
+      <div class="field"><label for="reservationNumber">予約番号</label><input id="reservationNumber" name="reservation_number" type="text" required maxlength="11" autocomplete="off" placeholder="LD-1234ABCD"></div>
+      <div class="field"><label for="contact">予約時の電話番号またはメールアドレス</label><input id="contact" name="contact" type="text" required maxlength="254" autocomplete="email" placeholder="070-1234-5678 または you@example.com"></div>
+      <button id="submit" class="primary" type="submit">予約内容を確認する</button>
+    </form>
+    <a class="secondary" href="/">新しく予約する</a>
+  </section>
+  <section id="result" class="hidden">
+    <p class="eyebrow">Reservation details</p>
+    <h1>ご予約内容</h1>
+    <div id="number" class="number"></div>
+    <div id="status" class="status hidden"></div>
+    <div class="card"><div class="row"><span>メニュー</span><strong id="menu"></strong></div><div class="row"><span>日時</span><strong id="datetime"></strong></div><div class="row"><span>講師</span><strong id="instructor"></strong></div></div>
+    <button id="cancel" class="cancel" type="button">この予約をキャンセルする</button>
+    <button id="again" class="primary" type="button">別の予約を確認する</button>
+    <a class="secondary" href="/">新しく予約する</a>
+  </section>
+</main>
+<script>
+const $=s=>document.querySelector(s);let lookupPayload=null;
+const format=s=>new Intl.DateTimeFormat('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(s));
+const message=text=>{$('#message').textContent=text;$('#message').classList.toggle('hidden',!text)};
+function showResult(data){$('#search').classList.add('hidden');$('#result').classList.remove('hidden');$('#number').textContent='予約番号: '+data.reservation_number;$('#menu').textContent=data.menu;$('#datetime').textContent=format(data.starts_at);$('#instructor').textContent=data.instructor;const cancelled=data.status==='cancelled';$('#status').textContent=cancelled?'この予約はキャンセル済みです':'';$('#status').classList.toggle('hidden',!cancelled);$('#cancel').disabled=cancelled;$('#cancel').textContent=cancelled?'キャンセル済み':'この予約をキャンセルする'}
+$('#form').onsubmit=async e=>{e.preventDefault();if(!e.currentTarget.reportValidity())return;lookupPayload=Object.fromEntries(new FormData(e.currentTarget));message('');$('#submit').disabled=true;$('#submit').textContent='確認しています…';try{const r=await fetch('/api/reservations/lookup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(lookupPayload)});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.detail||'予約を確認できませんでした');showResult(body)}catch(error){message(error.message)}finally{$('#submit').disabled=false;$('#submit').textContent='予約内容を確認する'}};
+$('#again').onclick=()=>{$('#result').classList.add('hidden');$('#search').classList.remove('hidden');message('')};
+$('#cancel').onclick=async()=>{if(!confirm('この予約をキャンセルしますか？\n取り消し後は元に戻せません。'))return;$('#cancel').disabled=true;$('#cancel').textContent='処理しています…';try{const r=await fetch('/api/reservations/lookup/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(lookupPayload)});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.detail||'処理できませんでした');$('#status').textContent='この予約はキャンセル済みです';$('#status').classList.remove('hidden');$('#cancel').textContent='キャンセル済み'}catch(error){alert(error.message);$('#cancel').disabled=false;$('#cancel').textContent='この予約をキャンセルする'}};
+</script>
+</body>
+</html>
