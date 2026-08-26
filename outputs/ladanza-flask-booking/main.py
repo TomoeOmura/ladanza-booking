@@ -19,6 +19,7 @@ from google_calendar import (
     calendar_for,
     cancel_booking_event,
     create_event,
+    find_booking_by_number,
     get_event,
     list_calendar_events,
     load_calendar_settings,
@@ -56,6 +57,10 @@ _settings_cache_until: datetime | None = None
 
 def token_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def contact_digest(kind: str, value: str) -> str:
+    return token_digest(f"{kind}:{value}")
 
 
 def reservation_token(event_id: str, request_key: str) -> str:
@@ -116,6 +121,56 @@ def event_instructor(event: dict) -> str | None:
         if line.startswith("講師:"):
             return line.split(":", 1)[1].strip() or None
     return None
+
+
+def description_value(event: dict, label: str) -> str:
+    prefix = f"{label}:"
+    for line in (event.get("description") or "").splitlines():
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def normalize_lookup_payload(payload: dict) -> tuple[str, str, str] | None:
+    booking_id = str(payload.get("reservation_number", "")).strip().upper().replace(" ", "")
+    if re.fullmatch(r"[0-9A-F]{8}", booking_id):
+        booking_id = "LD-" + booking_id
+    contact = str(payload.get("contact", "")).strip()
+    if not re.fullmatch(r"LD-[0-9A-F]{8}", booking_id) or not contact:
+        return None
+    if "@" in contact:
+        email = contact.lower()
+        if len(email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            return None
+        return booking_id, "email", email
+    phone = re.sub(r"[^0-9]", "", contact)
+    if not re.fullmatch(r"\d{10,11}", phone):
+        return None
+    return booking_id, "phone", phone
+
+
+def lookup_contact_matches(event: dict, kind: str, value: str) -> bool:
+    private = event_private(event)
+    stored_hash = private.get(f"{kind}_hash", "")
+    if stored_hash:
+        return hmac.compare_digest(stored_hash, contact_digest(kind, value))
+    if kind == "email":
+        stored = description_value(event, "メール").lower()
+    else:
+        stored = re.sub(r"[^0-9]", "", description_value(event, "電話"))
+    return bool(stored) and hmac.compare_digest(stored, value)
+
+
+def lookup_response(event: dict) -> dict:
+    private = event_private(event)
+    return {
+        "reservation_number": private.get("booking_id") or reservation_number(event["id"]),
+        "menu": private.get("menu", ""),
+        "instructor": private.get("instructor", ""),
+        "starts_at": private.get("starts_at") or event["start"].get("dateTime"),
+        "duration_minutes": int(private.get("duration") or 0),
+        "status": private.get("status", "confirmed"),
+    }
 
 
 def overlaps(start: datetime, end: datetime, other_start: datetime, other_end: datetime) -> bool:
@@ -227,6 +282,12 @@ def index():
 @app.get("/reservation.html")
 def reservation_file():
     return send_from_directory(BASE, "reservation.html")
+
+
+@app.get("/reservation-lookup")
+@app.get("/reservation-lookup.html")
+def reservation_lookup_file():
+    return send_from_directory(BASE, "reservation-lookup.html")
 
 
 @app.get("/admin")
@@ -355,6 +416,8 @@ def book():
                          "phone": phone, "email": email, "capacity": menu["capacity"],
                          "duration": menu["duration"], "booking_id": reservation_number(event_id),
                          "request_key_hash": request_hash, "token_hash": token_digest(token),
+                         "email_hash": contact_digest("email", email),
+                         "phone_hash": contact_digest("phone", phone),
                          "privacy_consent_at": consent_at, "source": source}
         created = create_event(calendar_id, start, end, event_payload, event_id=event_id)
     except Exception:
@@ -467,6 +530,45 @@ def reservation(token):
                     "starts_at": private.get("starts_at") or event["start"].get("dateTime"),
                     "duration_minutes": int(private.get("duration") or 0),
                     "status": private.get("status", "confirmed")})
+
+
+def lookup_event(payload: dict) -> dict | None:
+    normalized = normalize_lookup_payload(payload)
+    if not normalized:
+        return None
+    booking_id, kind, value = normalized
+    event = find_booking_by_number(calendar_for("スタジオ主催"), booking_id)
+    if not event or not lookup_contact_matches(event, kind, value):
+        return None
+    return event
+
+
+@app.post("/api/reservations/lookup")
+def reservation_lookup():
+    payload = request.get_json(silent=True) or {}
+    try:
+        event = lookup_event(payload)
+    except Exception:
+        app.logger.exception("Reservation number lookup failed")
+        return jsonify({"detail": "予約情報を取得できませんでした"}), 503
+    if not event:
+        return jsonify({"detail": "予約番号または連絡先が一致しません"}), 404
+    return jsonify(lookup_response(event))
+
+
+@app.post("/api/reservations/lookup/cancel")
+def reservation_lookup_cancel():
+    payload = request.get_json(silent=True) or {}
+    try:
+        event = lookup_event(payload)
+        if not event:
+            return jsonify({"detail": "予約番号または連絡先が一致しません"}), 404
+        if event_private(event).get("status", "confirmed") != "cancelled":
+            cancel_booking_event(calendar_for("スタジオ主催"), event)
+    except Exception:
+        app.logger.exception("Google Calendar lookup cancellation failed")
+        return jsonify({"detail": "キャンセル処理を完了できませんでした。La Danzaへお問い合わせください"}), 503
+    return {"ok": True, "status": "cancelled"}
 
 
 @app.post("/api/reservations/<token>/cancel")
