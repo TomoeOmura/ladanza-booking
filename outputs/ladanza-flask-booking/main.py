@@ -289,6 +289,14 @@ def clock(value: str) -> time:
 
 
 def slot_window_enabled(start: datetime, duration: int, settings: dict, instructor: str) -> bool:
+    if instructor == "テーマパークダンス":
+        date_key = start.date().isoformat()
+        overrides = settings["date_overrides"].get(instructor, {})
+        if date_key in overrides:
+            enabled = set(overrides[date_key])
+        else:
+            enabled = set(settings["instructor_slots"].get(instructor, {}).get(str(start.weekday()), []))
+        return start.strftime("%H:%M") in enabled
     cursor, end = start, start + timedelta(minutes=duration)
     while cursor < end:
         date_key = cursor.date().isoformat()
