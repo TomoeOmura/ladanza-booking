@@ -365,6 +365,12 @@ def privacy_page():
     return send_from_directory(BASE, "privacy.html")
 
 
+@app.get("/schedule")
+@app.get("/schedule.html")
+def schedule_page():
+    return send_from_directory(BASE, "schedule.html")
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "storage": "google-calendar"}
