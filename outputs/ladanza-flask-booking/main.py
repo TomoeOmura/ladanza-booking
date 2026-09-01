@@ -179,11 +179,15 @@ def lookup_contact_matches(event: dict, kind: str, value: str) -> bool:
     return bool(stored) and hmac.compare_digest(stored, value)
 
 
+def public_menu_name(menu: str) -> str:
+    return "チャーター" if menu == "チャーター 30分" else menu
+
+
 def lookup_response(event: dict) -> dict:
     private = event_private(event)
     return {
         "reservation_number": private.get("booking_id") or reservation_number(event["id"]),
-        "menu": private.get("menu", ""),
+        "menu": public_menu_name(private.get("menu", "")),
         "instructor": private.get("instructor", ""),
         "starts_at": private.get("starts_at") or event["start"].get("dateTime"),
         "duration_minutes": int(private.get("duration") or 0),
@@ -612,7 +616,7 @@ def reservation(token):
         return jsonify({"detail": "予約が見つかりません"}), 404
     private = event_private(event)
     return jsonify({"reservation_number": private.get("booking_id") or reservation_number(event["id"]),
-                    "menu": private.get("menu", ""), "instructor": private.get("instructor", ""),
+                    "menu": public_menu_name(private.get("menu", "")), "instructor": private.get("instructor", ""),
                     "starts_at": private.get("starts_at") or event["start"].get("dateTime"),
                     "duration_minutes": int(private.get("duration") or 0),
                     "status": private.get("status", "confirmed")})
