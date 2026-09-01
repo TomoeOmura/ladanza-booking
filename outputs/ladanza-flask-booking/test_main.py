@@ -205,6 +205,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
         self.assertIn("'テーマパークダンス 60分':'テーマパークダンス'", page)
         self.assertIn("60分・定員15名・残席表示", page)
+        self.assertIn("${menuLabels[state.menu]||state.menu}", page)
 
         admin_response = self.client.get("/admin")
         admin = admin_response.get_data(as_text=True)
@@ -278,11 +279,18 @@ class BookingApiTests(unittest.TestCase):
 
     def test_charter_uses_studio_schedule_and_capacity_six(self):
         start = self._future_start()
+        first_booking = None
         for index in range(6):
             response = self.client.post("/api/bookings", json=self._payload(
                 instructor="スタジオ主催", menu="チャーター 30分", start=start,
                 phone=f"070-0000-{index:04d}"))
             self.assertEqual(response.status_code, 201)
+            if index == 0:
+                first_booking = response.get_json()
+        token = parse_qs(urlparse(first_booking["reservation_url"]).query)["token"][0]
+        self.assertEqual(self.client.get(f"/api/reservations/{token}").get_json()["menu"], "チャーター")
+        lookup = self.client.post("/api/reservations/lookup-all", json={"contact": "070-0000-0000"})
+        self.assertEqual(lookup.get_json()["bookings"][0]["menu"], "チャーター")
         full = self.client.post("/api/bookings", json=self._payload(
             instructor="スタジオ主催", menu="チャーター 30分", start=start,
             phone="070-0000-9999"))
