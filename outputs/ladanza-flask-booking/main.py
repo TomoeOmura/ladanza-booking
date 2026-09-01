@@ -42,15 +42,21 @@ DEFAULT_MENUS = {
     "初級パック 30分": {"duration": 30, "capacity": 1},
     "サロン": {"duration": 30, "capacity": 10},
     "チャーター 30分": {"duration": 30, "capacity": 6},
+    "テーマパークダンス 60分": {"duration": 60, "capacity": 15},
 }
 TIME_SLOTS = [f"{hour:02d}:{minute:02d}" for hour in range(10, 22) for minute in (0, 30)]
 DEFAULT_WEEKLY_SLOTS = {str(day): (TIME_SLOTS.copy() if day < 6 else []) for day in range(7)}
 PRIVATE_INSTRUCTORS = ["大村 尊", "大村 友恵", "廣瀬 裕貴"]
 GROUP_INSTRUCTOR = "スタジオ主催"
 INSTRUCTORS = PRIVATE_INSTRUCTORS + [GROUP_INSTRUCTOR]
-GROUP_SCHEDULES = {"サロン": "サロン", "チャーター 30分": "チャーター"}
+GROUP_SCHEDULES = {
+    "サロン": "サロン",
+    "チャーター 30分": "チャーター",
+    "テーマパークダンス 60分": "テーマパークダンス",
+}
 SCHEDULE_RESOURCES = PRIVATE_INSTRUCTORS + list(GROUP_SCHEDULES.values())
 DEFAULT_INSTRUCTOR_SLOTS = {name: deepcopy(DEFAULT_WEEKLY_SLOTS) for name in SCHEDULE_RESOURCES}
+DEFAULT_INSTRUCTOR_SLOTS["テーマパークダンス"] = {str(day): [] for day in range(7)}
 DEFAULT_SETTINGS = {
     "open_time": "10:00", "close_time": "22:00", "slot_interval": 30,
     "closed_weekdays": [6], "weekly_slots": DEFAULT_WEEKLY_SLOTS,
@@ -223,7 +229,9 @@ def normalize_settings(settings: dict) -> dict:
     settings["instructor_slots"] = {
         name: deepcopy(stored_slots.get(
             name,
-            legacy_group_slots if name in GROUP_SCHEDULES.values() else settings["weekly_slots"],
+            ({str(day): [] for day in range(7)} if name == "テーマパークダンス"
+             else legacy_group_slots if name in {"サロン", "チャーター"}
+             else settings["weekly_slots"]),
         ))
         for name in SCHEDULE_RESOURCES
     }
