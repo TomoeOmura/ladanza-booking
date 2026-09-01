@@ -304,10 +304,21 @@ class BookingApiTests(unittest.TestCase):
     def test_theme_park_dance_has_its_own_slot_and_capacity_fifteen(self):
         start = datetime.fromisoformat(self._future_start(16, 30))
         day = str(start.weekday())
-        self.saved_settings["instructor_slots"]["テーマパークダンス"][day] = ["16:30", "17:00"]
+        self.saved_settings["instructor_slots"]["テーマパークダンス"][day] = ["16:30", "17:30"]
         self.saved_settings["instructor_slots"]["サロン"][day] = []
         self.saved_settings["instructor_slots"]["チャーター"][day] = []
         main._settings_cache = None
+
+        slots = self.client.get("/api/slots", query_string={
+            "menu": "テーマパークダンス 60分", "instructor": "スタジオ主催", "days": 2,
+        }).get_json()
+        starts = {datetime.fromisoformat(item["starts_at"]).strftime("%H:%M") for item in slots}
+        self.assertEqual(starts, {"16:30", "17:30"})
+
+        unconfigured = self.client.post("/api/bookings", json=self._payload(
+            instructor="スタジオ主催", menu="テーマパークダンス 60分",
+            start=start.replace(hour=17, minute=0).isoformat()))
+        self.assertEqual(unconfigured.status_code, 400)
 
         for index in range(15):
             response = self.client.post("/api/bookings", json=self._payload(
