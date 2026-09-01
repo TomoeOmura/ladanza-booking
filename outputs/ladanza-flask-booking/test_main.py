@@ -195,16 +195,17 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("日付を選び直す", page)
         self.assertIn("LINE友だち追加特典：20分無料体験（お1人様1回）", page)
         self.assertIn("trialOffer=source==='line'&&params.get('trial')==='1'", page)
-        self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分']", page)
+        self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分','テーマパークダンス 60分']", page)
         self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
-        self.assertIn("const menuLabels={'チャーター 30分':'チャーター'}", page)
+        self.assertIn("'テーマパークダンス 60分':'テーマパークダンス'", page)
+        self.assertIn("60分・定員15名・残席表示", page)
 
         admin_response = self.client.get("/admin")
         admin = admin_response.get_data(as_text=True)
         admin_response.close()
-        self.assertIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','サロン','チャーター']", admin)
+        self.assertIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','サロン','チャーター','テーマパークダンス']", admin)
         self.assertNotIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','スタジオ主催']", admin)
-        self.assertIn("const menuLabels={'チャーター 30分':'チャーター'}", admin)
+        self.assertIn("'テーマパークダンス 60分':'テーマパークダンス'", admin)
 
     def test_slots_default_to_a_31_day_window(self):
         response = self.client.get("/api/slots", query_string={
@@ -300,6 +301,30 @@ class BookingApiTests(unittest.TestCase):
         self.assertEqual(salon.status_code, 400)
         self.assertEqual(charter.status_code, 201)
 
+    def test_theme_park_dance_has_its_own_slot_and_capacity_fifteen(self):
+        start = datetime.fromisoformat(self._future_start(16, 30))
+        day = str(start.weekday())
+        self.saved_settings["instructor_slots"]["テーマパークダンス"][day] = ["16:30", "17:00"]
+        self.saved_settings["instructor_slots"]["サロン"][day] = []
+        self.saved_settings["instructor_slots"]["チャーター"][day] = []
+        main._settings_cache = None
+
+        for index in range(15):
+            response = self.client.post("/api/bookings", json=self._payload(
+                instructor="スタジオ主催", menu="テーマパークダンス 60分",
+                start=start.isoformat(), phone=f"070-1000-{index:04d}"))
+            self.assertEqual(response.status_code, 201)
+
+        full = self.client.post("/api/bookings", json=self._payload(
+            instructor="スタジオ主催", menu="テーマパークダンス 60分",
+            start=start.isoformat(), phone="070-1000-9999"))
+        self.assertEqual(full.status_code, 409)
+        self.assertIn("満員", full.get_json()["detail"])
+
+        salon = self.client.post("/api/bookings", json=self._payload(
+            instructor="スタジオ主催", menu="サロン", start=start.isoformat()))
+        self.assertEqual(salon.status_code, 400)
+
     def test_confirmation_and_cancellation_survive_without_sqlite(self):
         created = self.client.post("/api/bookings", json=self._payload()).get_json()
         token = parse_qs(urlparse(created["reservation_url"]).query)["token"][0]
@@ -361,12 +386,17 @@ class BookingApiTests(unittest.TestCase):
         legacy["menus"].pop("初級パック 30分")
         legacy["menus"].pop("サロン")
         legacy["menus"].pop("チャーター 30分")
+        legacy["menus"].pop("テーマパークダンス 60分")
+        legacy["instructor_slots"].pop("テーマパークダンス")
+        legacy["date_overrides"].pop("テーマパークダンス")
         legacy["menus"]["初級パック30分"] = {"duration": 30, "capacity": 1}
         legacy["menus"]["サロン・グループ"] = {"duration": 30, "capacity": 15}
         migrated = main.normalize_settings(legacy)
         self.assertEqual(migrated["menus"]["初級パック 30分"]["duration"], 30)
         self.assertEqual(migrated["menus"]["サロン"]["capacity"], 10)
         self.assertEqual(migrated["menus"]["チャーター 30分"]["capacity"], 6)
+        self.assertEqual(migrated["menus"]["テーマパークダンス 60分"], {"duration": 60, "capacity": 15})
+        self.assertTrue(all(not slots for slots in migrated["instructor_slots"]["テーマパークダンス"].values()))
         self.assertNotIn("サロン・グループ", migrated["menus"])
 
     def test_legacy_studio_schedule_is_copied_to_salon_and_charter(self):
