@@ -190,6 +190,8 @@ class BookingApiTests(unittest.TestCase):
         schedule_page = schedule.get_data(as_text=True)
         self.assertIn("9月 ダンスサロン予定表", schedule_page)
         self.assertIn("19:00〜21:00", schedule_page)
+        self.assertIn('9/7（月）</span><span class="time">13:00〜15:00', schedule_page)
+        self.assertIn('9/28（月）</span><span class="time">13:00〜15:00', schedule_page)
         self.assertIn("1,500円（ドリンク1杯つき）", schedule_page)
         schedule.close()
         self.assertNotIn("demoSlots", page)
