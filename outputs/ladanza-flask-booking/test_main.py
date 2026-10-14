@@ -192,7 +192,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("19:00〜21:00", schedule_page)
         self.assertIn('9/7（月）</span><span class="time">13:00〜15:00', schedule_page)
         self.assertIn('9/28（月）</span><span class="time">13:00〜15:00', schedule_page)
-        self.assertIn("1,500円（ドリンク1杯つき）", schedule_page)
+        self.assertIn("一般 2,500円・会員 2,200円", schedule_page)
         schedule.close()
         self.assertNotIn("demoSlots", page)
         self.assertIn("架空の空き枠は表示していません", page)
@@ -204,7 +204,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("日付を選び直す", page)
         self.assertIn("LINE友だち追加特典：20分無料体験（お1人様1回）", page)
         self.assertIn("trialOffer=source==='line'&&params.get('trial')==='1'", page)
-        self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分','テーマパークダンス 60分']", page)
+        self.assertIn("const publicMenus=['個人レッスン 60分','個人レッスン 30分','初心者パック 30分','初級パック 30分','サロン','チャーター 30分','テーマパークダンス 60分','社会人サークル 60分']", page)
         self.assertIn("const menus=trialOffer?[...publicMenus,'無料体験 20分']:publicMenus", page)
         self.assertIn("'テーマパークダンス 60分':'テーマパークダンス'", page)
         self.assertIn("60分・定員15名・残席表示", page)
@@ -213,7 +213,7 @@ class BookingApiTests(unittest.TestCase):
         admin_response = self.client.get("/admin")
         admin = admin_response.get_data(as_text=True)
         admin_response.close()
-        self.assertIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','サロン','チャーター','テーマパークダンス']", admin)
+        self.assertIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','サロン','チャーター','テーマパークダンス','社会人サークル']", admin)
         self.assertNotIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','スタジオ主催']", admin)
         self.assertIn("'テーマパークダンス 60分':'テーマパークダンス'", admin)
 
@@ -317,6 +317,68 @@ class BookingApiTests(unittest.TestCase):
 
         self.assertEqual(salon.status_code, 400)
         self.assertEqual(charter.status_code, 201)
+
+    def test_circle_recurrence_and_existing_settings_migration(self):
+        legacy = deepcopy(main.DEFAULT_SETTINGS)
+        for key in ("instructor_slots", "date_overrides"):
+            legacy[key].pop("社会人サークル")
+        legacy["menus"].pop("社会人サークル 60分")
+        legacy["date_overrides"][main.GROUP_INSTRUCTOR] = {"2026-10-14": ["10:00"]}
+        migrated = main.normalize_settings(legacy)
+        self.assertEqual(migrated["menus"]["社会人サークル 60分"], {"duration": 60, "capacity": 10})
+        self.assertEqual(migrated["instructor_slots"]["サロン"], legacy["instructor_slots"]["サロン"])
+        self.assertEqual(migrated["date_overrides"]["社会人サークル"], {})
+        for day, expected in (("2026-10-14", ["19:30"]), ("2026-10-28", ["19:30"]),
+                              ("2026-10-07", []), ("2026-10-21", []), ("2026-12-30", []),
+                              ("2026-11-11", ["19:30"]), ("2026-11-25", ["19:30"]),
+                              ("2027-01-13", ["19:30"]), ("2026-09-23", [])):
+            self.assertEqual(main.schedule_labels(datetime.fromisoformat(day).date(), migrated, "社会人サークル"), expected)
+        migrated["date_overrides"]["社会人サークル"]["2026-10-14"] = []
+        migrated["date_overrides"]["社会人サークル"]["2026-10-21"] = ["18:00"]
+        self.assertEqual(main.schedule_labels(datetime(2026, 10, 14).date(), migrated, "社会人サークル"), [])
+        self.assertEqual(main.schedule_labels(datetime(2026, 10, 21).date(), migrated, "社会人サークル"), ["18:00"])
+
+    def test_circle_slots_booking_capacity_and_cancellation(self):
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 10, 1, 9, tzinfo=JST)
+        with patch.object(main, "datetime", FixedDatetime):
+            query = {"menu": "社会人サークル 60分", "instructor": "スタジオ主催", "days": 31}
+            response = self.client.get("/api/slots", query_string=query)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([x["starts_at"] for x in response.get_json()],
+                             ["2026-10-14T19:30:00+09:00", "2026-10-28T19:30:00+09:00"])
+            for start in ("2026-10-21T19:30:00+09:00", "2026-10-14T20:00:00+09:00"):
+                bad = self.client.post("/api/bookings", json=self._payload(menu=query["menu"], instructor=query["instructor"], start=start))
+                self.assertEqual(bad.status_code, 400)
+            for index in range(10):
+                created = self.client.post("/api/bookings", json=self._payload(
+                    menu=query["menu"], instructor=query["instructor"], start="2026-10-14T19:30:00+09:00", phone=f"070-2000-{index:04d}"))
+                self.assertEqual(created.status_code, 201)
+            token = parse_qs(urlparse(created.get_json()["reservation_url"]).query)["token"][0]
+            details = self.client.get(f"/api/reservations/{token}").get_json()
+            self.assertEqual(details["menu"], "社会人サークル")
+            self.assertEqual(details["duration_minutes"], 60)
+            slots = self.client.get("/api/slots", query_string=query).get_json()
+            self.assertEqual(slots[0]["remaining"], 0)
+            self.assertFalse(slots[0]["available"])
+            full = self.client.post("/api/bookings", json=self._payload(menu=query["menu"], instructor=query["instructor"], start="2026-10-14T19:30:00+09:00"))
+            self.assertEqual(full.status_code, 409)
+            self.assertEqual(self.client.post(f"/api/reservations/{token}/cancel").status_code, 200)
+            self.assertEqual(self.client.get("/api/slots", query_string=query).get_json()[0]["remaining"], 1)
+
+    def test_old_admin_page_preserves_circle_configuration(self):
+        self.saved_settings["date_overrides"]["社会人サークル"] = {"2026-10-28": []}
+        payload = deepcopy(self.saved_settings)
+        payload["instructor_slots"].pop("社会人サークル")
+        payload["date_overrides"].pop("社会人サークル")
+        payload["menus"].pop("社会人サークル 60分")
+        response = self.client.put("/api/admin/settings", json=payload,
+                                   headers={"X-Admin-Token": os.environ["ADMIN_TOKEN"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["date_overrides"]["社会人サークル"], {"2026-10-28": []})
+        self.assertEqual(response.get_json()["menus"]["社会人サークル 60分"]["capacity"], 10)
 
     def test_theme_park_dance_has_its_own_slot_and_capacity_fifteen(self):
         start = datetime.fromisoformat(self._future_start(16, 30))
@@ -459,3 +521,4 @@ class BookingApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

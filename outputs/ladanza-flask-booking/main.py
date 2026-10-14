@@ -43,6 +43,7 @@ DEFAULT_MENUS = {
     "サロン": {"duration": 30, "capacity": 10},
     "チャーター 30分": {"duration": 30, "capacity": 6},
     "テーマパークダンス 60分": {"duration": 60, "capacity": 15},
+    "社会人サークル 60分": {"duration": 60, "capacity": 10},
 }
 TIME_SLOTS = [f"{hour:02d}:{minute:02d}" for hour in range(10, 22) for minute in (0, 30)]
 DEFAULT_WEEKLY_SLOTS = {str(day): (TIME_SLOTS.copy() if day < 6 else []) for day in range(7)}
@@ -53,10 +54,12 @@ GROUP_SCHEDULES = {
     "サロン": "サロン",
     "チャーター 30分": "チャーター",
     "テーマパークダンス 60分": "テーマパークダンス",
+    "社会人サークル 60分": "社会人サークル",
 }
 SCHEDULE_RESOURCES = PRIVATE_INSTRUCTORS + list(GROUP_SCHEDULES.values())
 DEFAULT_INSTRUCTOR_SLOTS = {name: deepcopy(DEFAULT_WEEKLY_SLOTS) for name in SCHEDULE_RESOURCES}
 DEFAULT_INSTRUCTOR_SLOTS["テーマパークダンス"] = {str(day): [] for day in range(7)}
+DEFAULT_INSTRUCTOR_SLOTS["社会人サークル"] = {str(day): (["19:30"] if day == 2 else []) for day in range(7)}
 DEFAULT_SETTINGS = {
     "open_time": "10:00", "close_time": "22:00", "slot_interval": 30,
     "closed_weekdays": [6], "weekly_slots": DEFAULT_WEEKLY_SLOTS,
@@ -180,6 +183,8 @@ def lookup_contact_matches(event: dict, kind: str, value: str) -> bool:
 
 
 def public_menu_name(menu: str) -> str:
+    if menu == "社会人サークル 60分":
+        return "社会人サークル"
     return "チャーター" if menu == "チャーター 30分" else menu
 
 
@@ -233,7 +238,7 @@ def normalize_settings(settings: dict) -> dict:
     settings["instructor_slots"] = {
         name: deepcopy(stored_slots.get(
             name,
-            ({str(day): [] for day in range(7)} if name == "テーマパークダンス"
+            (DEFAULT_INSTRUCTOR_SLOTS[name] if name in {"テーマパークダンス", "社会人サークル"}
              else legacy_group_slots if name in {"サロン", "チャーター"}
              else settings["weekly_slots"]),
         ))
@@ -244,7 +249,7 @@ def normalize_settings(settings: dict) -> dict:
     settings["date_overrides"] = {
         name: deepcopy(stored_overrides.get(
             name,
-            legacy_group_overrides if name in GROUP_SCHEDULES.values() else {},
+            legacy_group_overrides if name in {"サロン", "チャーター", "テーマパークダンス"} else {},
         ))
         for name in SCHEDULE_RESOURCES
     }
@@ -292,14 +297,21 @@ def clock(value: str) -> time:
     return time.fromisoformat(value)
 
 
+def schedule_labels(target: date, settings: dict, resource: str) -> list[str]:
+    """Date overrides take priority; the circle otherwise meets on 2nd/4th Wednesdays."""
+    if resource == "社会人サークル" and target < date(2026, 10, 14):
+        return []
+    overrides = settings["date_overrides"].get(resource, {})
+    if target.isoformat() in overrides:
+        return overrides[target.isoformat()]
+    if resource == "社会人サークル" and (target.weekday() != 2 or (target.day - 1) // 7 + 1 not in (2, 4)):
+        return []
+    return settings["instructor_slots"].get(resource, {}).get(str(target.weekday()), [])
+
+
 def slot_window_enabled(start: datetime, duration: int, settings: dict, instructor: str) -> bool:
-    if instructor == "テーマパークダンス":
-        date_key = start.date().isoformat()
-        overrides = settings["date_overrides"].get(instructor, {})
-        if date_key in overrides:
-            enabled = set(overrides[date_key])
-        else:
-            enabled = set(settings["instructor_slots"].get(instructor, {}).get(str(start.weekday()), []))
+    if instructor in {"テーマパークダンス", "社会人サークル"}:
+        enabled = set(schedule_labels(start.date(), settings, instructor))
         return start.strftime("%H:%M") in enabled
     cursor, end = start, start + timedelta(minutes=duration)
     while cursor < end:
@@ -409,8 +421,7 @@ def slots():
     for offset in range(days):
         target = now.date() + timedelta(days=offset)
         closing = datetime.combine(target, closing_time, JST)
-        overrides = settings["date_overrides"].get(schedule, {})
-        labels = overrides[target.isoformat()] if target.isoformat() in overrides else settings["instructor_slots"].get(schedule, {}).get(str(target.weekday()), [])
+        labels = schedule_labels(target, settings, schedule)
         for label in labels:
             cursor = datetime.combine(target, clock(label), JST)
             end = cursor + timedelta(minutes=menu["duration"])
@@ -549,6 +560,12 @@ def admin_settings_put():
         instructor_slots = payload["instructor_slots"]
         date_overrides = payload.get("date_overrides", get_settings().get("date_overrides", {}))
         menus = payload["menus"]
+        # An admin page opened before this release must not erase the new menu.
+        if "社会人サークル" not in instructor_slots or "社会人サークル 60分" not in menus:
+            current = get_settings()
+            instructor_slots.setdefault("社会人サークル", current["instructor_slots"]["社会人サークル"])
+            date_overrides.setdefault("社会人サークル", current["date_overrides"]["社会人サークル"])
+            menus.setdefault("社会人サークル 60分", current["menus"]["社会人サークル 60分"])
         clean_instructors = {}
         for instructor in SCHEDULE_RESOURCES:
             weekly = instructor_slots[instructor]
@@ -702,3 +719,4 @@ def cancel(token):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=os.getenv("FLASK_DEBUG") == "1")
+
