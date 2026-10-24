@@ -123,3 +123,13 @@ python main.py
 - 管理API: `GET /api/admin/month?month=YYYY-MM`、`GET /api/admin/bookings?date=YYYY-MM-DD`。管理トークンが必須でキャッシュ不可。月APIは顧客氏名を返しません。
 
 検証: `python -m unittest -q`。画面操作テストは開発用に `jsdom` をインストールした環境で `node tests/admin-ui.cjs`（本番依存には追加不要）。
+
+## 電子チケット受付への予約人数連携
+
+`GET /api/integrations/ticket/today` は、電子チケット側のサーバー署名がある場合のみ当日（Asia/Tokyo）の予約集計を返します。公開鍵 `ticket-integration-public.pem` は公開可能な検証用の鍵です。対になるRSA-2048 PKCS#8秘密鍵は電子チケットのSites秘密環境変数 `BOOKING_RECEPTION_PRIVATE_KEY` にのみ保存します。予約アプリやGitには秘密鍵を置きません。
+
+署名対象は `GET\n/api/integrations/ticket/today\n<UNIX秒>`、RSA-SHA256/PKCS#1 v1.5。`X-LaDanza-Timestamp` と `X-LaDanza-Signature`（base64url、パディングなし）を使い、有効期限60秒・未来時刻許容10秒です。管理APIの権限は与えません。応答はno-storeで、氏名・電話番号・予約番号・カレンダーIDなどは返しません。
+
+当日開始、予約アプリ経由、取消／透明イベントを除く予約が対象です。予約者数は正規化した氏名＋電話番号ハッシュで重複を除きます。予約件数と延べ人数は別に返します。現在のフォームは1予約1名です。過去の複数人予約や本人情報の不足は人数不明とし、カレンダー読取失敗を0件で返さないでください。
+
+停止・鍵更新時は公開鍵を交換してRenderへデプロイし、電子チケット側の秘密環境変数も更新してデプロイします。`python -m unittest -q` に署名、日付境界、取消、重複、個人情報の非返却、障害時の検証を含みます。

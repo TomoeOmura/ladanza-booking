@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 
 from line_notification import send_line_admin_notification
+import ticket_integration
 from google_calendar import (
     calendar_for,
     cancel_booking_event,
@@ -592,10 +593,24 @@ def admin_settings_get():
 
 @app.after_request
 def protect_admin_responses(response):
-    if request.path.startswith("/api/admin/"):
+    if request.path.startswith(("/api/admin/", "/api/integrations/")):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
     return response
+
+
+@app.get(ticket_integration.INTEGRATION_PATH)
+def ticket_daily_totals():
+    now = datetime.now(JST)
+    if not ticket_integration.authorized(request.headers, now):
+        return jsonify({"detail": "認証に失敗しました"}), 401
+    start = datetime.combine(now.date(), time.min, JST)
+    try:
+        events = list_calendar_events(calendar_for(GROUP_INSTRUCTOR), start, start + timedelta(days=1))
+        return jsonify(ticket_integration.daily_totals(events, now))
+    except Exception:
+        app.logger.exception("Ticket integration daily totals lookup failed")
+        return jsonify({"detail": "本日の予約人数を確認できません"}), 503
 
 
 def daily_event_summary(event: dict) -> dict:
