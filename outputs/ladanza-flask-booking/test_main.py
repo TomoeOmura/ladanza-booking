@@ -281,7 +281,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertIn("満員", full.get_json()["detail"])
 
     def test_charter_uses_studio_schedule_and_capacity_six(self):
-        start = self._future_start()
+        start = self._future_charter_start()
         first_booking = None
         for index in range(6):
             response = self.client.post("/api/bookings", json=self._payload(
@@ -304,7 +304,7 @@ class BookingApiTests(unittest.TestCase):
         self.assertEqual(wrong_instructor.status_code, 400)
 
     def test_salon_and_charter_use_separate_admin_schedules(self):
-        start = datetime.fromisoformat(self._future_start(10))
+        start = datetime.fromisoformat(self._future_charter_start())
         day = str(start.weekday())
         self.saved_settings["instructor_slots"]["サロン"][day] = []
         self.saved_settings["instructor_slots"]["チャーター"][day] = ["10:00"]
@@ -317,6 +317,101 @@ class BookingApiTests(unittest.TestCase):
 
         self.assertEqual(salon.status_code, 400)
         self.assertEqual(charter.status_code, 201)
+
+    def _future_charter_start(self):
+        target = datetime.now(JST).date() + timedelta(days=1)
+        while target.weekday() != 3 or target.day > 7:
+            target += timedelta(days=1)
+        return datetime(target.year, target.month, target.day, 10, tzinfo=JST).isoformat()
+
+    def test_charter_only_first_thursday_even_with_date_overrides(self):
+        settings = deepcopy(main.DEFAULT_SETTINGS)
+        target = datetime(2026, 11, 1).date()
+        stop = datetime(2029, 1, 1).date()
+        while target < stop:
+            labels = main.schedule_labels(target, settings, "チャーター")
+            self.assertEqual(bool(labels), target.weekday() == 3 and target.day <= 7, target)
+            target += timedelta(days=1)
+        settings["date_overrides"]["チャーター"] = {
+            "2026-11-05": [], "2026-11-12": ["20:00"], "2026-11-06": ["20:00"],
+        }
+        for day in (5, 6, 12):
+            start = datetime(2026, 11, day, 20, tzinfo=JST)
+            self.assertFalse(main.slot_window_enabled(start, 30, settings, "チャーター"))
+
+    def test_charter_public_slots_and_direct_booking_apply_monthly_limit(self):
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 10, 24, 10, tzinfo=JST)
+        self.saved_settings["instructor_slots"]["チャーター"] = {str(d): ["20:00"] for d in range(7)}
+        self.saved_settings["date_overrides"]["チャーター"]["2026-11-12"] = ["20:00"]
+        with patch.object(main, "datetime", FixedDatetime):
+            slots = self.client.get('/api/slots', query_string={"menu": "チャーター 30分"}).get_json()
+            self.assertEqual([slot["starts_at"] for slot in slots], ["2026-11-05T20:00:00+09:00"])
+            blocked = self.client.post('/api/bookings', json=self._payload(
+                instructor="スタジオ主催", menu="チャーター 30分", start="2026-11-12T20:00:00+09:00"))
+            self.assertEqual(blocked.status_code, 400)
+            allowed = self.client.post('/api/bookings', json=self._payload(
+                instructor="スタジオ主催", menu="チャーター 30分", start="2026-11-05T20:00:00+09:00"))
+            self.assertEqual(allowed.status_code, 201)
+
+    def test_daily_bookings_require_authentication_and_valid_date(self):
+        with patch.object(main, "list_calendar_events") as events:
+            for headers in ({}, {"X-Admin-Token": "wrong"}):
+                response = self.client.get('/api/admin/bookings?date=2026-11-05', headers=headers)
+                self.assertEqual(response.status_code, 401)
+                self.assertIn('no-store', response.headers['Cache-Control'])
+            for value in ('', '2026-02-30', '20261105', '2026-11-05T00:00:00', '9999-12-31'):
+                response = self.client.get('/api/admin/bookings', query_string={"date": value},
+                                           headers={"X-Admin-Token": os.environ['ADMIN_TOKEN']})
+                self.assertEqual(response.status_code, 400)
+            events.assert_not_called()
+
+    def test_daily_bookings_show_day_overlap_cancellations_and_manual_events_without_secrets(self):
+        def fixture(key, start, end, private=None, **extra):
+            return {"id": key, "start": start, "end": end,
+                    "extendedProperties": {"private": private or {}}, **extra}
+        tags = {"source": "ladanza-booking", "menu": "個人レッスン 30分", "instructor": "廣瀬 裕貴",
+                "booking_id": "LD-12345678", "token_hash": "never-return-this-token", "phone_hash": "never-return-this-hash"}
+        items = [
+            fixture('late', {"dateTime": "2026-11-05T18:00:00+09:00"}, {"dateTime": "2026-11-05T18:30:00+09:00"}, tags,
+                    summary="La Danza｜個人レッスン 30分｜予約 太郎", description="お名前: 予約 太郎\n電話: 09012345678\nメール: private@example.test"),
+            fixture('cancel', {"dateTime": "2026-11-05T19:00:00+09:00"}, {"dateTime": "2026-11-05T19:30:00+09:00"},
+                    {**tags, "status": "cancelled"}, transparency="transparent"),
+            fixture('night', {"dateTime": "2026-11-04T14:30:00Z"}, {"dateTime": "2026-11-04T16:00:00Z"}, summary="日をまたぐ予定"),
+            fixture('all', {"date": "2026-11-05"}, {"date": "2026-11-06"}, summary="終日の予定"),
+            fixture('before', {"dateTime": "2026-11-04T23:00:00+09:00"}, {"dateTime": "2026-11-05T00:00:00+09:00"}),
+            fixture('after', {"dateTime": "2026-11-06T00:00:00+09:00"}, {"dateTime": "2026-11-06T01:00:00+09:00"}),
+            fixture('settings', {"date": "2026-11-05"}, {"date": "2026-11-06"}, {"source": "ladanza-booking-settings"}),
+            {"id": "deleted", "status": "cancelled"},
+        ]
+        with patch.object(main, 'list_calendar_events', return_value=items) as events:
+            response = self.client.get('/api/admin/bookings?date=2026-11-05',
+                                       headers={"X-Admin-Token": os.environ['ADMIN_TOKEN']})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        data = response.get_json()
+        self.assertEqual(data['date'], '2026-11-05')
+        self.assertEqual(data['timezone'], 'Asia/Tokyo')
+        self.assertEqual(len(data['events']), 4)
+        self.assertEqual(data['events'][0]['starts_at'], '2026-11-04T23:30:00+09:00')
+        self.assertTrue(data['events'][1]['all_day'])
+        self.assertEqual(data['events'][2]['customer_name'], '予約 太郎')
+        self.assertEqual(data['events'][2]['resource'], '廣瀬 裕貴')
+        self.assertEqual(data['events'][3]['status'], 'cancelled')
+        for secret in ('never-return-this', '09012345678', 'private@example.test', 'extendedProperties'):
+            self.assertNotIn(secret, response.get_data(as_text=True))
+        self.assertEqual(events.call_args.args[1].isoformat(), '2026-11-05T00:00:00+09:00')
+        self.assertEqual(events.call_args.args[2].isoformat(), '2026-11-06T00:00:00+09:00')
+
+    def test_daily_bookings_failure_does_not_look_like_an_empty_day(self):
+        with patch.object(main, 'list_calendar_events', side_effect=RuntimeError('private diagnostic')):
+            response = self.client.get('/api/admin/bookings?date=2026-11-05',
+                                       headers={"X-Admin-Token": os.environ['ADMIN_TOKEN']})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('取得できません', response.get_json()['detail'])
+        self.assertNotIn('private diagnostic', response.get_data(as_text=True))
 
     def test_circle_recurrence_and_existing_settings_migration(self):
         legacy = deepcopy(main.DEFAULT_SETTINGS)
@@ -389,7 +484,8 @@ class BookingApiTests(unittest.TestCase):
         main._settings_cache = None
 
         slots = self.client.get("/api/slots", query_string={
-            "menu": "テーマパークダンス 60分", "instructor": "スタジオ主催", "days": 2,
+            "menu": "テーマパークダンス 60分", "instructor": "スタジオ主催",
+            "days": (start.date() - datetime.now(JST).date()).days + 1,
         }).get_json()
         starts = {datetime.fromisoformat(item["starts_at"]).strftime("%H:%M") for item in slots}
         self.assertEqual(starts, {"16:30", "17:30"})

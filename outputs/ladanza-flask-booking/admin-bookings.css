@@ -1,0 +1,29 @@
+.admin-tabs{display:flex;gap:8px;margin:8px 0 24px;flex-wrap:wrap}
+.admin-tabs button{background:var(--mint);color:var(--g);font:inherit;font-weight:700;min-height:46px}
+.admin-tabs button[aria-pressed=true]{background:var(--g);color:#fff}
+.daily-toolbar{display:flex;flex-wrap:wrap;gap:9px;align-items:end;padding:16px 0}
+.daily-toolbar label{display:grid;gap:6px;font-size:13px;font-weight:700}
+.daily-toolbar input,.daily-toolbar select{width:auto;max-width:100%;min-height:44px;font:inherit;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff;color:var(--g)}
+.daily-toolbar button{min-height:44px;font:inherit;white-space:nowrap}
+.daily-secondary{background:var(--mint);color:var(--g)}
+.daily-filter{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 14px}
+.daily-filter label{display:flex;gap:8px;align-items:center;font-size:14px}
+.daily-filter input{width:20px;height:20px;margin:0;accent-color:var(--g)}
+.daily-updated{font-size:12px;color:var(--muted)}
+.daily-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0 20px}
+.daily-stat{padding:15px;background:var(--mint);border-radius:13px;font-size:13px}
+.daily-stat strong{display:block;font-size:27px;margin-bottom:3px}
+.daily-list{display:grid;gap:10px}
+.daily-card{display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:16px;padding:18px;border:1px solid var(--line);border-left:5px solid #6fa58e;border-radius:12px;background:#fff;align-items:start}
+.daily-card.cancelled{border-left-color:#a5918e;background:#faf7f6}
+.daily-card.calendar{border-left-color:#b79b62}
+.daily-time{font-size:17px;font-weight:700;line-height:1.7;white-space:pre-line}
+.daily-name{font-size:18px;overflow-wrap:anywhere}
+.daily-detail{font-size:14px;line-height:1.8;margin:5px 0 0;overflow-wrap:anywhere}
+.daily-badge{font-size:12px;white-space:nowrap;border-radius:20px;padding:6px 9px;background:var(--mint);color:var(--g)}
+.cancelled .daily-badge{background:#f2e5e2;color:#824f46}
+.calendar .daily-badge{background:#f4eddd;color:#715c32}
+.daily-message{padding:22px;border:1px dashed var(--line);border-radius:12px;background:#fff;line-height:1.8}
+.daily-message.error{background:#fff0eb;color:#8a3e2b;border-color:#d9afa0}
+.daily-heading{font-size:20px!important;margin:0!important}
+@media(max-width:600px){.daily-toolbar{gap:8px}.daily-toolbar label{flex:1 1 150px}.daily-toolbar input,.daily-toolbar select{width:100%}.daily-toolbar button{flex:1}.daily-card{grid-template-columns:1fr auto;gap:8px 12px;padding:14px}.daily-time{grid-column:1/-1;white-space:normal}.daily-content{grid-column:1}.daily-stats{gap:6px}.daily-stat{font-size:11px;padding:12px 9px}.daily-stat strong{font-size:24px}}

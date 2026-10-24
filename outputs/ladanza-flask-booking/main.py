@@ -298,7 +298,9 @@ def clock(value: str) -> time:
 
 
 def schedule_labels(target: date, settings: dict, resource: str) -> list[str]:
-    """Date overrides take priority; the circle otherwise meets on 2nd/4th Wednesdays."""
+    """Apply the charter's monthly limit before any individual date settings."""
+    if resource == "チャーター" and (target.weekday() != 3 or target.day > 7):
+        return []
     if resource == "社会人サークル" and target < date(2026, 10, 14):
         return []
     overrides = settings["date_overrides"].get(resource, {})
@@ -315,12 +317,7 @@ def slot_window_enabled(start: datetime, duration: int, settings: dict, instruct
         return start.strftime("%H:%M") in enabled
     cursor, end = start, start + timedelta(minutes=duration)
     while cursor < end:
-        date_key = cursor.date().isoformat()
-        overrides = settings["date_overrides"].get(instructor, {})
-        if date_key in overrides:
-            enabled = set(overrides[date_key])
-        else:
-            enabled = set(settings["instructor_slots"].get(instructor, {}).get(str(cursor.weekday()), []))
+        enabled = set(schedule_labels(cursor.date(), settings, instructor))
         if cursor.strftime("%H:%M") not in enabled:
             return False
         cursor += timedelta(minutes=30)
@@ -370,6 +367,16 @@ def reservation_lookup_file():
 @app.get("/admin")
 def admin_page():
     return send_from_directory(BASE, "admin.html")
+
+
+@app.get("/admin-bookings.js")
+def admin_bookings_script():
+    return send_from_directory(BASE, "admin-bookings.js")
+
+
+@app.get("/admin-bookings.css")
+def admin_bookings_styles():
+    return send_from_directory(BASE, "admin-bookings.css")
 
 
 @app.get("/privacy")
@@ -549,6 +556,75 @@ def admin_settings_get():
     except Exception:
         app.logger.exception("Calendar-backed settings lookup failed")
         return jsonify({"detail": "設定を取得できませんでした"}), 503
+
+
+@app.after_request
+def protect_admin_responses(response):
+    if request.path.startswith("/api/admin/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
+def daily_event_summary(event: dict) -> dict:
+    """Return only display fields, never calendar metadata or verification tokens."""
+    private = event_private(event)
+    start, end = event_window(event)
+    is_booking = private.get("source") == "ladanza-booking"
+    cancelled = event.get("status") == "cancelled" or private.get("status") == "cancelled"
+    menu = public_menu_name(private.get("menu", "")) if is_booking else ""
+    name = description_value(event, "お名前") if is_booking else ""
+    # Older app reservations may keep their name/menu only in the event title.
+    title = str(event.get("summary") or "名称未設定の予定")
+    parts = title.split("｜", 2)
+    if is_booking and len(parts) == 3 and parts[0] == "La Danza":
+        menu = menu or public_menu_name(parts[1])
+        name = name or parts[2]
+    return {
+        "kind": "booking" if is_booking else "calendar",
+        "title": menu if is_booking else title,
+        "customer_name": name,
+        "instructor": event_instructor(event) or "",
+        "resource": GROUP_SCHEDULES.get(private.get("menu"), event_instructor(event) or "") if is_booking else event_instructor(event) or "",
+        "menu": menu,
+        "starts_at": start.isoformat(),
+        "ends_at": end.isoformat(),
+        "all_day": "date" in event.get("start", {}),
+        "status": "cancelled" if cancelled else "confirmed",
+        "reservation_number": (private.get("booking_id") or reservation_number(event["id"])) if is_booking else "",
+    }
+
+
+@app.get("/api/admin/bookings")
+def admin_daily_bookings():
+    if not admin_required():
+        return jsonify({"detail": "認証に失敗しました"}), 401
+    value = request.args.get("date", "")
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError
+        target = date.fromisoformat(value)
+        start = datetime.combine(target, time.min, JST)
+        end = start + timedelta(days=1)
+    except (ValueError, OverflowError):
+        return jsonify({"detail": "日付を確認してください"}), 400
+    try:
+        events = list_calendar_events(calendar_for(GROUP_INSTRUCTOR), start, end)
+        rows = []
+        for event in events:
+            # Skip deleted events and the application's settings record.
+            private = event_private(event)
+            if event.get("status") == "cancelled" or private.get("source") == "ladanza-booking-settings":
+                continue
+            event_start, event_end = event_window(event)
+            if overlaps(start, end, event_start, event_end):
+                rows.append(daily_event_summary(event))
+        rows.sort(key=lambda row: (row["starts_at"], row["instructor"], row["customer_name"]))
+    except Exception:
+        app.logger.exception("Daily booking overview lookup failed")
+        return jsonify({"detail": "予約状況を取得できませんでした。再読み込みしてください"}), 503
+    return jsonify({"date": target.isoformat(), "timezone": "Asia/Tokyo",
+                    "updated_at": datetime.now(JST).isoformat(), "events": rows})
 
 
 @app.put("/api/admin/settings")
