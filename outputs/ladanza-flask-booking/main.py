@@ -373,6 +373,18 @@ def admin_page():
     return send_from_directory(BASE, "admin.html")
 
 
+@app.get("/admin-icons/<filename>")
+def admin_icon(filename):
+    if filename not in {"booking-v1-180.png", "booking-v1-192.png", "booking-v1-512.png"}:
+        return jsonify({"detail": "Not found"}), 404
+    return send_from_directory(BASE / "icons", filename)
+
+
+@app.get("/admin.webmanifest")
+def admin_manifest():
+    return send_from_directory(BASE, "admin.webmanifest", mimetype="application/manifest+json")
+
+
 @app.get("/admin-bookings.js")
 def admin_bookings_script():
     return send_from_directory(BASE, "admin-bookings.js")
