@@ -265,6 +265,7 @@ def normalize_settings(settings: dict) -> dict:
         name: deepcopy(stored_menus.get(name, defaults))
         for name, defaults in DEFAULT_MENUS.items()
     }
+    settings.setdefault("recurrence_rules", {})
     return settings
 
 
@@ -307,6 +308,9 @@ def schedule_labels(target: date, settings: dict, resource: str) -> list[str]:
     if target.isoformat() in overrides:
         return overrides[target.isoformat()]
     if resource == "社会人サークル" and (target.weekday() != 2 or (target.day - 1) // 7 + 1 not in (2, 4)):
+        return []
+    weeks = settings.get("recurrence_rules", {}).get(resource, {}).get(str(target.weekday()))
+    if weeks is not None and (target.day - 1) // 7 + 1 not in weeks:
         return []
     return settings["instructor_slots"].get(resource, {}).get(str(target.weekday()), [])
 
@@ -377,6 +381,16 @@ def admin_bookings_script():
 @app.get("/admin-bookings.css")
 def admin_bookings_styles():
     return send_from_directory(BASE, "admin-bookings.css")
+
+
+@app.get("/admin-settings.js")
+def admin_settings_script():
+    return send_from_directory(BASE, "admin-settings.js")
+
+
+@app.get("/admin-workspace.css")
+def admin_workspace_styles():
+    return send_from_directory(BASE, "admin-workspace.css")
 
 
 @app.get("/privacy")
@@ -547,12 +561,18 @@ def book():
     return jsonify(booking_response(created, public_url, token)), 201
 
 
+def settings_revision(settings: dict) -> str:
+    value = {key: item for key, item in settings.items() if key != "revision"}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 @app.get("/api/admin/settings")
 def admin_settings_get():
     if not admin_required():
         return jsonify({"detail": "認証に失敗しました"}), 401
     try:
-        return jsonify(get_settings(force=True))
+        settings = get_settings(force=True)
+        return jsonify({**settings, "revision": settings_revision(settings)})
     except Exception:
         app.logger.exception("Calendar-backed settings lookup failed")
         return jsonify({"detail": "設定を取得できませんでした"}), 503
@@ -595,6 +615,71 @@ def daily_event_summary(event: dict) -> dict:
     }
 
 
+def admin_availability(target: date, settings: dict, events: list[dict], now: datetime) -> list[dict]:
+    """Use the public booking conflict/capacity rules for the admin's free times."""
+    result = []
+    for resource in SCHEDULE_RESOURCES:
+        group_menu = next((menu for menu, name in GROUP_SCHEDULES.items() if name == resource), None)
+        instructor = GROUP_INSTRUCTOR if group_menu else resource
+        menu = settings["menus"][group_menu or "個人レッスン 30分"]
+        labels = schedule_labels(target, settings, resource)
+        free = []
+        for label in labels:
+            start = datetime.combine(target, clock(label), JST)
+            end = start + timedelta(minutes=menu["duration"])
+            if start <= now or end > datetime.combine(target, time(22), JST):
+                continue
+            if not slot_window_enabled(start, menu["duration"], settings, resource):
+                continue
+            booked = sum(matching_group_event(event, group_menu, instructor, start) for event in events) if group_menu else 0
+            blocked = any(event_blocks(event, instructor, start, end, group_menu) for event in events)
+            if not blocked and booked < menu["capacity"]:
+                free.append({"start": label, "end": end.strftime("%H:%M"), "remaining": menu["capacity"] - booked})
+        status = "available" if free else "closed" if not labels else "ended" if target < now.date() else "unavailable"
+        result.append({"resource": resource, "status": status, "group": bool(group_menu), "slots": free})
+    return result
+
+
+def overview_events(events: list[dict]) -> list[dict]:
+    return [event for event in events if event.get("status") != "cancelled"
+            and event_private(event).get("source") != "ladanza-booking-settings"]
+
+
+@app.get("/api/admin/month")
+def admin_month_bookings():
+    if not admin_required():
+        return jsonify({"detail": "認証に失敗しました"}), 401
+    value = request.args.get("month", "")
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}", value):
+            raise ValueError
+        first = date.fromisoformat(value + "-01")
+        following = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+        start, end = datetime.combine(first, time.min, JST), datetime.combine(following, time.min, JST)
+    except (ValueError, OverflowError):
+        return jsonify({"detail": "年月を確認してください"}), 400
+    try:
+        settings = get_settings()
+        events = overview_events(list_calendar_events(calendar_for(GROUP_INSTRUCTOR), start, end))
+        now, days = datetime.now(JST), []
+        for offset in range((following - first).days):
+            target = first + timedelta(days=offset)
+            day_start = datetime.combine(target, time.min, JST)
+            day_events = [event for event in events if overlaps(day_start, day_start + timedelta(days=1), *event_window(event))]
+            counts = {}
+            for event in day_events:
+                row = daily_event_summary(event)
+                bucket = counts.setdefault(row["resource"], {"bookings": 0, "calendar": 0, "cancelled": 0})
+                bucket["cancelled" if row["status"] == "cancelled" else "bookings" if row["kind"] == "booking" else "calendar"] += 1
+            availability = admin_availability(target, settings, day_events, now)
+            days.append({"date": target.isoformat(), "counts": counts,
+                         "availability": {row["resource"]: row["status"] for row in availability}})
+    except Exception:
+        app.logger.exception("Monthly booking overview lookup failed")
+        return jsonify({"detail": "月の予約状況を取得できませんでした。再読み込みしてください"}), 503
+    return jsonify({"month": value, "days": days, "updated_at": now.isoformat(), "timezone": "Asia/Tokyo"})
+
+
 @app.get("/api/admin/bookings")
 def admin_daily_bookings():
     if not admin_required():
@@ -609,7 +694,7 @@ def admin_daily_bookings():
     except (ValueError, OverflowError):
         return jsonify({"detail": "日付を確認してください"}), 400
     try:
-        events = list_calendar_events(calendar_for(GROUP_INSTRUCTOR), start, end)
+        events = overview_events(list_calendar_events(calendar_for(GROUP_INSTRUCTOR), start, end))
         rows = []
         for event in events:
             # Skip deleted events and the application's settings record.
@@ -620,11 +705,12 @@ def admin_daily_bookings():
             if overlaps(start, end, event_start, event_end):
                 rows.append(daily_event_summary(event))
         rows.sort(key=lambda row: (row["starts_at"], row["instructor"], row["customer_name"]))
+        availability = admin_availability(target, get_settings(), events, datetime.now(JST))
     except Exception:
         app.logger.exception("Daily booking overview lookup failed")
         return jsonify({"detail": "予約状況を取得できませんでした。再読み込みしてください"}), 503
     return jsonify({"date": target.isoformat(), "timezone": "Asia/Tokyo",
-                    "updated_at": datetime.now(JST).isoformat(), "events": rows})
+                    "updated_at": datetime.now(JST).isoformat(), "events": rows, "availability": availability})
 
 
 @app.put("/api/admin/settings")
@@ -633,6 +719,9 @@ def admin_settings_put():
         return jsonify({"detail": "認証に失敗しました"}), 401
     payload = request.get_json(silent=True) or {}
     try:
+        current_settings = get_settings(force=True)
+        if payload.get("revision") and payload["revision"] != settings_revision(current_settings):
+            return jsonify({"detail": "別の画面で設定が更新されています。再読み込みしてから変更し直してください"}), 409
         instructor_slots = payload["instructor_slots"]
         date_overrides = payload.get("date_overrides", get_settings().get("date_overrides", {}))
         menus = payload["menus"]
@@ -668,6 +757,20 @@ def admin_settings_put():
             if duration < 15 or duration > 180 or capacity < 1 or capacity > 15:
                 raise ValueError
             clean_menus[name] = {"duration": duration, "capacity": capacity}
+        rules = payload.get("recurrence_rules", current_settings.get("recurrence_rules", {}))
+        clean_rules = {}
+        if not isinstance(rules, dict):
+            raise ValueError
+        for resource, weekdays in rules.items():
+            if resource not in SCHEDULE_RESOURCES or not isinstance(weekdays, dict):
+                raise ValueError
+            clean_rules[resource] = {}
+            for day, weeks in weekdays.items():
+                if day not in [str(i) for i in range(7)] or not isinstance(weeks, list) or not weeks:
+                    raise ValueError
+                if any(type(week) is not int or week not in range(1, 6) for week in weeks):
+                    raise ValueError
+                clean_rules[resource][day] = sorted(set(weeks))
     except (KeyError, TypeError, ValueError):
         return jsonify({"detail": "設定値を確認してください"}), 400
     legacy_weekly = clean_instructors[INSTRUCTORS[0]]
@@ -675,13 +778,13 @@ def admin_settings_put():
     clean = {"open_time": "10:00", "close_time": "22:00", "slot_interval": 30,
              "closed_weekdays": closed, "weekly_slots": legacy_weekly,
              "instructor_slots": clean_instructors, "date_overrides": clean_overrides,
-             "menus": clean_menus}
+             "menus": clean_menus, "recurrence_rules": clean_rules}
     try:
         set_settings(clean)
     except Exception:
         app.logger.exception("Calendar-backed settings update failed")
         return jsonify({"detail": "設定を保存できませんでした"}), 503
-    return jsonify(clean)
+    return jsonify({**clean, "revision": settings_revision(clean)})
 
 
 @app.get("/api/admin/calendar-status")

@@ -213,6 +213,7 @@ class BookingApiTests(unittest.TestCase):
         admin_response = self.client.get("/admin")
         admin = admin_response.get_data(as_text=True)
         admin_response.close()
+        admin = self.client.get("/admin-settings.js").get_data(as_text=True)
         self.assertIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','サロン','チャーター','テーマパークダンス','社会人サークル']", admin)
         self.assertNotIn("instructors=['大村 尊','大村 友恵','廣瀬 裕貴','スタジオ主催']", admin)
         self.assertIn("'テーマパークダンス 60分':'テーマパークダンス'", admin)
@@ -412,6 +413,88 @@ class BookingApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn('取得できません', response.get_json()['detail'])
         self.assertNotIn('private diagnostic', response.get_data(as_text=True))
+
+    def test_month_requires_auth_and_strict_month(self):
+        self.assertEqual(self.client.get('/api/admin/month?month=2026-11').status_code, 401)
+        headers = {"X-Admin-Token": os.environ['ADMIN_TOKEN']}
+        for value in ('', '2026-13', '202611', '2026-1', '9999-12', '2026-11-01'):
+            self.assertEqual(self.client.get('/api/admin/month', query_string={'month': value}, headers=headers).status_code, 400)
+
+    def test_month_counts_overlap_and_hides_customer_data(self):
+        tags = {'source': 'ladanza-booking', 'menu': '個人レッスン 30分', 'instructor': '廣瀬 裕貴'}
+        self.events['booking'] = {'id': 'booking', 'summary': 'La Danza｜個人レッスン 30分｜非公開氏名',
+            'start': {'dateTime': '2026-11-05T10:00:00+09:00'}, 'end': {'dateTime': '2026-11-05T10:30:00+09:00'},
+            'extendedProperties': {'private': tags}}
+        self.events['cancelled'] = {**deepcopy(self.events['booking']), 'id': 'cancelled',
+            'extendedProperties': {'private': {**tags, 'status': 'cancelled'}}}
+        self.events['overnight'] = {'id': 'overnight', 'summary': '非公開予定名',
+            'start': {'dateTime': '2026-11-05T23:00:00+09:00'}, 'end': {'dateTime': '2026-11-06T01:00:00+09:00'}}
+        response = self.client.get('/api/admin/month?month=2026-11', headers={'X-Admin-Token': os.environ['ADMIN_TOKEN']})
+        self.assertEqual(response.status_code, 200)
+        days = response.get_json()['days']
+        self.assertEqual(len(days), 30)
+        self.assertEqual(days[4]['counts']['廣瀬 裕貴'], {'bookings': 1, 'cancelled': 1, 'calendar': 0})
+        self.assertEqual(days[4]['counts']['']['calendar'], 1)
+        self.assertEqual(days[5]['counts']['']['calendar'], 1)
+        self.assertEqual(days[11]['availability']['チャーター'], 'closed')
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        self.assertNotIn('非公開', response.get_data(as_text=True))
+
+    def test_month_failure_is_not_empty_success(self):
+        with patch.object(main, 'list_calendar_events', side_effect=RuntimeError('private diagnostic')):
+            response = self.client.get('/api/admin/month?month=2026-11', headers={'X-Admin-Token': os.environ['ADMIN_TOKEN']})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('private diagnostic', response.get_data(as_text=True))
+
+    def test_monthly_rules_and_date_override_precedence(self):
+        settings = main.normalize_settings(deepcopy(main.DEFAULT_SETTINGS))
+        settings['recurrence_rules'] = {'廣瀬 裕貴': {'3': [1, 3, 5]}}
+        for day, enabled in ((1, True), (8, False), (15, True), (22, False), (29, True)):
+            result = main.schedule_labels(main.date(2026, 10, day), settings, '廣瀬 裕貴')
+            self.assertEqual(bool(result), enabled)
+        settings['date_overrides']['廣瀬 裕貴']['2026-10-08'] = ['17:00']
+        self.assertEqual(main.schedule_labels(main.date(2026, 10, 8), settings, '廣瀬 裕貴'), ['17:00'])
+        settings['date_overrides']['廣瀬 裕貴']['2026-10-15'] = []
+        self.assertEqual(main.schedule_labels(main.date(2026, 10, 15), settings, '廣瀬 裕貴'), [])
+
+    def test_stale_settings_are_rejected_and_old_clients_preserve_rules(self):
+        headers = {'X-Admin-Token': os.environ['ADMIN_TOKEN']}
+        first = self.client.get('/api/admin/settings', headers=headers).get_json()
+        changed = deepcopy(first)
+        changed['recurrence_rules'] = {'廣瀬 裕貴': {'3': [1, 3]}}
+        self.assertEqual(self.client.put('/api/admin/settings', json=changed, headers=headers).status_code, 200)
+        self.assertEqual(self.client.put('/api/admin/settings', json=first, headers=headers).status_code, 409)
+        first.pop('revision');first.pop('recurrence_rules')
+        self.assertEqual(self.client.put('/api/admin/settings', json=first, headers=headers).status_code, 200)
+        self.assertEqual(self.saved_settings['recurrence_rules'], changed['recurrence_rules'])
+        for invalid in ([0], [6], [], ['1'], [True]):
+            first['recurrence_rules'] = {'廣瀬 裕貴': {'3': invalid}}
+            self.assertEqual(self.client.put('/api/admin/settings', json=first, headers=headers).status_code, 400)
+
+    def test_admin_free_times_match_conflicts_capacity_and_cancellations(self):
+        target = main.date(2030, 1, 3)  # first Thursday
+        now = datetime(2030, 1, 1, tzinfo=JST)
+        settings = main.normalize_settings(deepcopy(main.DEFAULT_SETTINGS))
+        settings['date_overrides']['チャーター'][target.isoformat()] = ['20:00']
+        settings['date_overrides']['廣瀬 裕貴'][target.isoformat()] = ['10:00', '10:30', '17:00']
+        event = {'id': 'one', 'start': {'dateTime': '2030-01-03T10:00:00+09:00'},
+                 'end': {'dateTime': '2030-01-03T10:30:00+09:00'},
+                 'extendedProperties': {'private': {'instructor': '廣瀬 裕貴'}}}
+        result = {row['resource']: row for row in main.admin_availability(target, settings, [event], now)}
+        self.assertEqual([s['start'] for s in result['廣瀬 裕貴']['slots']], ['10:30', '17:00'])
+        self.assertEqual(result['チャーター']['slots'][0]['remaining'], 6)
+        event['extendedProperties']['private']['status'] = 'cancelled'
+        result = {row['resource']: row for row in main.admin_availability(target, settings, [event], now)}
+        self.assertEqual(len(result['廣瀬 裕貴']['slots']), 3)
+        group = {'id': 'group', 'start': {'dateTime': '2030-01-03T20:00:00+09:00'},
+                 'end': {'dateTime': '2030-01-03T20:30:00+09:00'}, 'extendedProperties': {'private': {
+                     'source': 'ladanza-booking', 'instructor': 'スタジオ主催', 'menu': 'チャーター 30分', 'booking_kind': 'group'}}}
+        result = {row['resource']: row for row in main.admin_availability(target, settings, [group] * 5, now)}
+        self.assertEqual(result['チャーター']['slots'][0]['remaining'], 1)
+        result = {row['resource']: row for row in main.admin_availability(target, settings, [group] * 6, now)}
+        self.assertEqual(result['チャーター']['slots'], [])
+        manual = {'id': 'manual', 'start': {'date': target.isoformat()}, 'end': {'date': '2030-01-04'}}
+        self.assertTrue(all(not row['slots'] for row in main.admin_availability(target, settings, [manual], now)))
 
     def test_circle_recurrence_and_existing_settings_migration(self):
         legacy = deepcopy(main.DEFAULT_SETTINGS)
