@@ -417,6 +417,13 @@ def schedule_page():
     return send_from_directory(BASE, "schedule.html")
 
 
+@app.get("/schedule-assets/<filename>")
+def schedule_asset(filename):
+    if filename not in {"ladanza-2026-11.png", "ladanza-2026-11.pdf"}:
+        return jsonify({"detail": "Not found"}), 404
+    return send_from_directory(BASE / "schedule-assets", filename)
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "storage": "google-calendar"}
