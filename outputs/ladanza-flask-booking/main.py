@@ -446,7 +446,7 @@ def slots():
         return jsonify({"detail": "メニューと講師の組み合わせが正しくありません"}), 400
     schedule = schedule_resource(menu_name, instructor)
     try:
-        days = min(max(int(request.args.get("days", 31)), 1), 31)
+        days = min(max(int(request.args.get("days", 31)), 1), 62 if menu_name == "サロン" else 31)
     except ValueError:
         return jsonify({"detail": "表示日数が正しくありません"}), 400
     now = datetime.now(JST)
