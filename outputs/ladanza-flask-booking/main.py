@@ -332,6 +332,13 @@ def slot_window_enabled(start: datetime, duration: int, settings: dict, instruct
     return True
 
 
+def salon_session_duration(menu_name: str, start: datetime, configured_duration: int) -> int:
+    """Dec 21 salon reservations represent the entire two-hour session."""
+    if menu_name == "サロン" and start.date() == date(2026, 12, 21):
+        return 120
+    return configured_duration
+
+
 def valid_business_start(start: datetime, duration: int, settings: dict, instructor: str) -> bool:
     return start.second == 0 and start.minute in (0, 30) and slot_window_enabled(start, duration, settings, instructor)
 
@@ -467,16 +474,19 @@ def slots():
         closing = datetime.combine(target, closing_time, JST)
         labels = schedule_labels(target, settings, schedule)
         for label in labels:
+            if menu_name == "サロン" and target == date(2026, 12, 21) and label not in {"13:00", "19:00"}:
+                continue
             cursor = datetime.combine(target, clock(label), JST)
-            end = cursor + timedelta(minutes=menu["duration"])
-            if end > closing or not slot_window_enabled(cursor, menu["duration"], settings, schedule):
+            duration = salon_session_duration(menu_name, cursor, menu["duration"])
+            end = cursor + timedelta(minutes=duration)
+            if end > closing or not slot_window_enabled(cursor, duration, settings, schedule):
                 continue
             matching = [event for event in events if is_group and matching_group_event(event, menu_name, instructor, cursor)]
             blocked = any(event_blocks(event, instructor, cursor, end, menu_name if is_group else None) for event in events)
             booked = len(matching) if is_group else (1 if blocked else 0)
             available = cursor > now and not blocked and booked < int(menu["capacity"])
             result.append({"id": slot_id, "instructor": instructor, "starts_at": cursor.isoformat(),
-                           "duration_minutes": menu["duration"], "capacity": menu["capacity"],
+                           "duration_minutes": duration, "capacity": menu["capacity"],
                            "booked": booked, "remaining": max(int(menu["capacity"]) - booked, 0),
                            "available": available})
             slot_id += 1
@@ -515,8 +525,11 @@ def book():
         start = parse_start(payload["starts_at"])
     except (TypeError, ValueError):
         return jsonify({"detail": "日時が正しくありません"}), 400
-    end = start + timedelta(minutes=menu["duration"])
-    if (not valid_business_start(start, menu["duration"], settings, schedule)
+    duration = salon_session_duration(str(payload["menu"]), start, menu["duration"])
+    if payload["menu"] == "サロン" and start.date() == date(2026, 12, 21) and start.strftime("%H:%M") not in {"13:00", "19:00"}:
+        return jsonify({"detail": "この日のサロンは13時と19時の2枠のみです"}), 400
+    end = start + timedelta(minutes=duration)
+    if (not valid_business_start(start, duration, settings, schedule)
             or end > datetime.combine(start.date(), clock(settings["close_time"]), JST)
             or start <= datetime.now(JST)):
         return jsonify({"detail": "営業時間外、定休日、または過去の日時です"}), 400
@@ -549,7 +562,7 @@ def book():
         consent_at = datetime.now(JST).isoformat()
         event_payload = {"menu": payload["menu"], "instructor": instructor, "name": name,
                          "phone": phone, "capacity": menu["capacity"],
-                         "duration": menu["duration"], "booking_id": reservation_number(event_id),
+                         "duration": duration, "booking_id": reservation_number(event_id),
                          "request_key_hash": request_hash, "token_hash": token_digest(token),
                          "phone_hash": phone_hash,
                          "privacy_consent_at": consent_at, "source": source}
@@ -662,11 +675,14 @@ def admin_availability(target: date, settings: dict, events: list[dict], now: da
         labels = schedule_labels(target, settings, resource)
         free = []
         for label in labels:
+            if group_menu == "サロン" and target == date(2026, 12, 21) and label not in {"13:00", "19:00"}:
+                continue
             start = datetime.combine(target, clock(label), JST)
-            end = start + timedelta(minutes=menu["duration"])
+            duration = salon_session_duration(group_menu or "個人レッスン 30分", start, menu["duration"])
+            end = start + timedelta(minutes=duration)
             if start <= now or end > datetime.combine(target, time(22), JST):
                 continue
-            if not slot_window_enabled(start, menu["duration"], settings, resource):
+            if not slot_window_enabled(start, duration, settings, resource):
                 continue
             booked = sum(matching_group_event(event, group_menu, instructor, start) for event in events) if group_menu else 0
             blocked = any(event_blocks(event, instructor, start, end, group_menu) for event in events)
