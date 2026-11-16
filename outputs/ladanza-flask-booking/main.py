@@ -306,6 +306,13 @@ def schedule_labels(target: date, settings: dict, resource: str) -> list[str]:
     if resource == "社会人サークル" and target < date(2026, 10, 14):
         return []
     overrides = settings["date_overrides"].get(resource, {})
+    # Special salon session on Monday 2026-12-21, 19:00–21:00.
+    # Preserve any other slots already configured for this date.
+    if resource == "サロン" and target == date(2026, 12, 21):
+        usual = overrides.get(target.isoformat())
+        if usual is None:
+            usual = settings["instructor_slots"].get(resource, {}).get(str(target.weekday()), [])
+        return sorted(set(usual) | {"19:00", "19:30", "20:00", "20:30"})
     if target.isoformat() in overrides:
         return overrides[target.isoformat()]
     if resource == "社会人サークル" and (target.weekday() != 2 or (target.day - 1) // 7 + 1 not in (2, 4)):
