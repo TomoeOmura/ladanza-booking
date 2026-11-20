@@ -106,6 +106,37 @@ function renderDailyBookings(){
     content.append(name,detail);
     if(row.reservation_number){const number=document.createElement('p');number.className='daily-updated';number.textContent='予約番号 '+row.reservation_number;content.append(number)}
     const badge=document.createElement('span');badge.className='daily-badge';badge.textContent=row.status==='cancelled'?'キャンセル':row.kind==='calendar'?'カレンダー予定':'予約確定';
+    if(row.kind==='booking'&&row.event_id){const repair=node('button','電話番号の修正・確認リンク再発行','secondary');repair.type='button';repair.onclick=()=>openBookingRecovery(row,content,repair);content.append(repair)}
     card.append(time,content,badge);$('#bookingList').append(card);
   }
+}
+
+async function openBookingRecovery(row,content,button){
+  if(content.querySelector('.recovery-panel')){content.querySelector('.recovery-panel').remove();return}
+  button.disabled=true;
+  const panel=node('div',undefined,'recovery-panel'),message=node('p','予約情報を確認しています…','recovery-result');message.setAttribute('role','status');panel.append(message);content.append(panel);
+  const url='/api/admin/bookings/'+encodeURIComponent(row.event_id)+'/recovery';
+  try{
+    const response=await fetch(url,{headers:headers(),cache:'no-store'}),data=await response.json();
+    if(!response.ok)throw new Error(data.detail||'予約情報を取得できませんでした');
+    message.textContent=[data.customer_name,LaDanzaReservations.format(data.starts_at),data.menu,data.instructor].join(' ／ ');
+    const form=node('form'),label=node('label','正しい電話番号'),phone=node('input');phone.type='tel';phone.inputMode='tel';phone.required=true;phone.maxLength=30;phone.value=data.phone;label.append(phone);
+    const identityLabel=node('label'),identity=node('input');identity.type='checkbox';identity.required=true;identityLabel.append(identity,document.createTextNode(' ご本人と予約内容を確認しました'));
+    const note=node('p','予約日時・人数は変更しません。これまでの予約完了リンクも引き続き使えます。','hint'),save=node('button','電話番号を保存して確認リンクを発行');save.type='submit';
+    const result=node('div',undefined,'recovery-result');result.setAttribute('role','status');form.append(label,identityLabel,note,save,result);panel.append(form);
+    phone.oninput=()=>phone.setCustomValidity('');
+    form.onsubmit=async event=>{
+      event.preventDefault();phone.value=LaDanzaReservations.normalizePhone(phone.value);phone.setCustomValidity(LaDanzaReservations.validPhone(phone.value)?'':'電話番号を10桁または11桁の数字で入力してください。');if(!form.reportValidity())return;
+      save.disabled=true;result.replaceChildren();save.textContent='保存しています…';
+      try{
+        const r=await fetch(url,{method:'POST',headers:headers(),body:JSON.stringify({phone:phone.value,identity_confirmed:identity.checked,revision:data.revision})}),body=await r.json();
+        if(!r.ok)throw new Error(body.detail||'保存結果を確認できませんでした。開き直してご確認ください。');
+        phone.disabled=true;identity.disabled=true;save.textContent='保存しました';
+        result.append(node('p','確認リンクを発行しました。ご本人へのLINE返信などに貼り付けてご案内ください。'));
+        const field=node('input');field.type='text';field.readOnly=true;field.value=body.reservation_url;field.setAttribute('aria-label','お客様の確認リンク');
+        const copy=node('button','確認リンクをコピー','secondary');copy.type='button';const status=node('p');status.setAttribute('role','status');copy.onclick=()=>LaDanzaReservations.copy(body.reservation_url,field,status);result.append(field,copy,status);
+      }catch(error){result.textContent=error.message;save.disabled=false;save.textContent='電話番号を保存して確認リンクを発行'}
+    };
+  }catch(error){message.textContent=error.message}
+  finally{button.disabled=false}
 }

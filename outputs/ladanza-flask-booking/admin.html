@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-title" content="ラダンツァ予約管理">
 <meta name="theme-color" content="#173f35">
 <link rel="stylesheet" href="/admin-bookings.css?v=2"><link rel="stylesheet" href="/admin-workspace.css?v=2">
-<script src="/admin-settings.js?v=2" defer></script><script src="/admin-bookings.js?v=2" defer></script></head>
+<link rel="stylesheet" href="/reservation-tools.css?v=1"><script src="/reservation-tools.js?v=1" defer></script><script src="/admin-settings.js?v=2" defer></script><script src="/admin-bookings.js?v=3" defer></script></head>
 <body><header><div class="wrap"><div class="brand">La Danza<small>予約管理</small></div></div></header><main>
 <div id="login" class="panel login"><h1>管理画面へようこそ</h1><label for="password">管理パスワード</label><div class="password-field"><input id="password" type="password" autocomplete="current-password" placeholder="管理パスワード"><button id="passwordToggle" type="button" class="secondary" aria-controls="password" aria-pressed="false" aria-label="パスワードを表示">表示</button></div><button id="loginBtn" type="button">管理画面を開く</button><p id="loginError" role="alert"></p></div>
 <section id="app" class="hidden"><nav class="admin-tabs" aria-label="管理メニュー"><button id="bookingsTab" type="button" aria-pressed="true">予約カレンダー</button><button id="scheduleTab" type="button" aria-pressed="false">予約枠の設定</button></nav>

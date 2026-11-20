@@ -250,6 +250,21 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
     return response
 
 
+def update_booking_contact(calendar_id: str, event: dict, phone: str, phone_hash: str, recovery_hash: str) -> dict:
+    """Correct one verified booking, keeping its original confirmation link valid."""
+    private = dict(event.get("extendedProperties", {}).get("private", {}))
+    private.update(phone_hash=phone_hash, recovery_token_hash=recovery_hash)
+    lines = (event.get("description") or "").splitlines()
+    lines = [line for line in lines if not line.startswith("電話:")]
+    lines.append(f"電話: {phone}")
+    operation = service().events().patch(
+        calendarId=calendar_id, eventId=event["id"],
+        body={"description": "\n".join(lines), "extendedProperties": {"private": private}},
+    )
+    operation.headers["If-Match"] = event["etag"]
+    return operation.execute()
+
+
 def cancel_booking_event(calendar_id: str, event: dict) -> dict:
     private = dict(event.get("extendedProperties", {}).get("private", {}))
     private["status"] = "cancelled"
@@ -259,9 +274,12 @@ def cancel_booking_event(calendar_id: str, event: dict) -> dict:
         "transparency": "transparent",
         "extendedProperties": {"private": private},
     }
-    return service().events().patch(
+    operation = service().events().patch(
         calendarId=calendar_id, eventId=event["id"], body=body
-    ).execute()
+    )
+    if event.get("etag"):
+        operation.headers["If-Match"] = event["etag"]
+    return operation.execute()
 
 
 def load_calendar_settings(calendar_id: str) -> dict | None:

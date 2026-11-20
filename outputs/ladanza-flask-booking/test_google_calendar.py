@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from zoneinfo import ZoneInfo
 
 import google_calendar
@@ -53,6 +53,33 @@ def event(start, end, *, instructor=None, menu=None, kind=None):
 
 
 class SharedCalendarTests(unittest.TestCase):
+    def test_contact_correction_uses_revision_and_preserves_booking_fields(self):
+        original = {"id": "booking", "etag": '"v1"', "description": "お名前: テスト\n電話: 09000000000\n備考: 保持",
+                    "extendedProperties": {"private": {"source": "ladanza-booking", "status": "cancelled", "token_hash": "original", "capacity": "10"}}}
+        service = MagicMock()
+        operation = service.events.return_value.patch.return_value
+        operation.headers = {}
+        with patch.object(google_calendar, "service", return_value=service):
+            google_calendar.update_booking_contact("calendar", original, "09012345678", "new-phone", "new-recovery")
+        args = service.events.return_value.patch.call_args.kwargs
+        self.assertEqual(operation.headers["If-Match"], '"v1"')
+        self.assertEqual(set(args["body"]), {"description", "extendedProperties"})
+        self.assertIn("備考: 保持", args["body"]["description"])
+        self.assertNotIn("09000000000", args["body"]["description"])
+        self.assertIn("電話: 09012345678", args["body"]["description"])
+        private = args["body"]["extendedProperties"]["private"]
+        self.assertEqual(private["token_hash"], "original")
+        self.assertEqual(private["status"], "cancelled")
+        self.assertEqual(original["extendedProperties"]["private"]["capacity"], private["capacity"])
+
+    def test_cancellation_cannot_overwrite_concurrent_contact_repair(self):
+        service = MagicMock()
+        operation = service.events.return_value.patch.return_value
+        operation.headers = {}
+        with patch.object(google_calendar, "service", return_value=service):
+            google_calendar.cancel_booking_event("calendar", {"id": "booking", "etag": '"before-repair"'})
+        self.assertEqual(operation.headers["If-Match"], '"before-repair"')
+
     def test_other_instructor_event_does_not_block(self):
         items = [
             event("2030-01-07T10:00:00+09:00", "2030-01-07T10:30:00+09:00", instructor="大村 尊"),
