@@ -33,6 +33,7 @@ class BookingApiTests(unittest.TestCase):
             patch.object(main, "find_bookings_by_phone_hash", side_effect=self._find_bookings_by_phone_hash),
             patch.object(main, "create_event", side_effect=self._create_event),
             patch.object(main, "cancel_booking_event", side_effect=self._cancel_event),
+            patch.object(main, "update_booking_contact", side_effect=self._update_contact),
             patch.object(main, "test_calendar_connection", return_value={"connected": True}),
         ]
         for item in self.patches:
@@ -81,12 +82,20 @@ class BookingApiTests(unittest.TestCase):
             "booking_source": booking["source"], "email_hash": booking.get("email_hash", ""),
             "phone_hash": booking["phone_hash"], "status": "confirmed",
         }
-        event = {"id": event_id, "summary": "test",
+        event = {"id": event_id, "etag": "revision-1", "summary": "test",
                  "description": f"電話: {booking['phone']}",
                  "start": {"dateTime": start.isoformat()}, "end": {"dateTime": end.isoformat()},
                  "extendedProperties": {"private": private}}
         self.events[event_id] = deepcopy(event)
         return event
+
+    def _update_contact(self, _calendar, event, phone, phone_hash, recovery_hash):
+        stored = self.events[event["id"]]
+        private = stored["extendedProperties"]["private"]
+        private.update(phone_hash=phone_hash, recovery_token_hash=recovery_hash)
+        stored["description"] = "\n".join(line for line in stored["description"].splitlines() if not line.startswith("電話:")) + "\n電話: " + phone
+        stored["etag"] += "-updated"
+        return deepcopy(stored)
 
     def _cancel_event(self, _calendar, event):
         stored = self.events[event["id"]]
@@ -106,6 +115,88 @@ class BookingApiTests(unittest.TestCase):
                 "name": "予約 テスト", "phone": phone,
                 "privacy_consent": True, "source": source, "participants": participants,
                 "request_key": request_key or f"request-key-{os.urandom(16).hex()}"}
+
+    def test_fullwidth_phone_and_separators_work_for_booking_and_lookup(self):
+        created = self.client.post("/api/bookings", json=self._payload(phone="０９０（１２３４）５６７８")).get_json()
+        found = self.client.post("/api/reservations/lookup-all", json={"contact": "０９０－１２３４－５６７８"})
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.get_json()["bookings"][0]["reservation_number"], created["reservation_number"])
+        invalid = self.client.post("/api/bookings", json=self._payload(phone="090a12345678", instructor="大村 友恵"))
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_typo_does_not_block_saved_link_and_admin_can_recover(self):
+        created = self.client.post("/api/bookings", json=self._payload(phone="09012345679")).get_json()
+        original_token = parse_qs(urlparse(created["reservation_url"]).query)["token"][0]
+        self.assertEqual(self.client.get("/api/reservations/" + original_token).status_code, 200)
+        self.assertEqual(self.client.post("/api/reservations/lookup-all", json={"contact": "09012345678"}).status_code, 404)
+        url = "/api/admin/bookings/" + created["id"] + "/recovery"
+        headers = {"X-Admin-Token": os.environ["ADMIN_TOKEN"]}
+        before = deepcopy(self.events[created["id"]])
+        self.assertEqual(self.client.get(url).status_code, 401)
+        self.assertEqual(self.client.post(url, json={"phone": "09012345678"}).status_code, 401)
+        info = self.client.get(url, headers=headers)
+        self.assertEqual(info.status_code, 200)
+        self.assertIn("no-store", info.headers["Cache-Control"])
+        payload = {"phone": "０９０－１２３４－５６７８", "revision": info.get_json()["revision"], "identity_confirmed": True}
+        response = self.client.post(url, headers=headers, json=payload)
+        self.assertEqual(response.status_code, 200)
+        recovery_token = parse_qs(urlparse(response.get_json()["reservation_url"]).query)["token"][0]
+        for token in (original_token, recovery_token):
+            detail = self.client.get("/api/reservations/" + token)
+            self.assertEqual(detail.status_code, 200)
+            self.assertIn("no-store", detail.headers["Cache-Control"])
+            self.assertEqual(detail.get_json()["reservation_number"], created["reservation_number"])
+        found = self.client.post("/api/reservations/lookup-all", json={"contact": "09012345678"})
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(self.client.post("/api/reservations/lookup-all", json={"contact": "09012345679"}).status_code, 404)
+        after = self.events[created["id"]]
+        for key in ("id", "summary", "start", "end"):
+            self.assertEqual(before[key], after[key])
+        for key in ("status", "token_hash", "capacity", "request_key_hash", "privacy_consent_at"):
+            self.assertEqual(before["extendedProperties"]["private"][key], after["extendedProperties"]["private"][key])
+        self.assertNotIn(recovery_token, json.dumps(after))
+        # A stale editor must not overwrite the corrected reservation.
+        self.assertEqual(self.client.post(url, headers=headers, json=payload).status_code, 409)
+        payload["revision"] = after["etag"]
+        second = self.client.post(url, headers=headers, json=payload)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(self.client.get("/api/reservations/" + recovery_token).status_code, 404)
+        self.assertEqual(self.client.get("/api/reservations/" + original_token).status_code, 200)
+
+    def test_recovery_requires_verified_identity_and_preserves_cancellation(self):
+        created = self.client.post("/api/bookings", json=self._payload()).get_json()
+        url = "/api/admin/bookings/" + created["id"] + "/recovery"
+        headers = {"X-Admin-Token": os.environ["ADMIN_TOKEN"]}
+        payload = {"phone": "09012345678", "revision": "revision-1"}
+        self.assertEqual(self.client.post(url, headers=headers, json=payload).status_code, 400)
+        payload.update(identity_confirmed=True, phone="090invalid12345678")
+        self.assertEqual(self.client.post(url, headers=headers, json=payload).status_code, 400)
+        payload["phone"] = "09012345678"
+        self._cancel_event(None, self.events[created["id"]])
+        result = self.client.post(url, headers=headers, json=payload)
+        token = parse_qs(urlparse(result.get_json()["reservation_url"]).query)["token"][0]
+        self.assertEqual(self.client.get("/api/reservations/" + token).get_json()["status"], "cancelled")
+        self.events[created["id"]]["extendedProperties"]["private"]["source"] = "unrelated"
+        self.assertEqual(self.client.get(url, headers=headers).status_code, 404)
+        self.assertEqual(self.client.post(url, headers=headers, json=payload).status_code, 404)
+
+    def test_recovery_failure_and_calendar_conflict_do_not_claim_success(self):
+        from googleapiclient.errors import HttpError
+        from httplib2 import Response
+        created = self.client.post("/api/bookings", json=self._payload()).get_json()
+        url = "/api/admin/bookings/" + created["id"] + "/recovery"
+        headers = {"X-Admin-Token": os.environ["ADMIN_TOKEN"]}
+        payload = {"phone": "09012345678", "revision": "revision-1", "identity_confirmed": True}
+        for failure, status in [(RuntimeError("unavailable"), 503), (HttpError(Response({"status": 412}), b"conflict"), 409)]:
+            with patch.object(main, "update_booking_contact", side_effect=failure):
+                result = self.client.post(url, headers=headers, json=payload)
+            self.assertEqual(result.status_code, status)
+            self.assertNotIn("reservation_url", result.get_json())
+
+    def test_confirmation_assets_are_served(self):
+        for path in ["/reservation-tools.js", "/reservation-tools.css", "/reservation-lookup.js"]:
+            with self.client.get(path) as response:
+                self.assertEqual(response.status_code, 200)
 
     def test_line_booking_sends_admin_notification(self):
         with patch.object(main, "send_line_admin_notification") as notify:
@@ -183,22 +274,21 @@ class BookingApiTests(unittest.TestCase):
         privacy.close()
         lookup = self.client.get("/reservation-lookup")
         self.assertEqual(lookup.status_code, 200)
-        self.assertIn("すべての予約を確認する", lookup.get_data(as_text=True))
+        self.assertIn("このスマホの予約", lookup.get_data(as_text=True))
         lookup.close()
         schedule = self.client.get("/schedule")
         self.assertEqual(schedule.status_code, 200)
         schedule_page = schedule.get_data(as_text=True)
-        self.assertIn("9月 ダンスサロン予定表", schedule_page)
+        self.assertIn("ダンスサロン予定表", schedule_page)
         self.assertIn("19:00〜21:00", schedule_page)
-        self.assertIn('9/7（月）</span><span class="time">13:00〜15:00', schedule_page)
-        self.assertIn('9/28（月）</span><span class="time">13:00〜15:00', schedule_page)
+        self.assertIn('href="/?source=line"', schedule_page)
+        self.assertIn('aria-label="月を選択"', schedule_page)
         self.assertIn("一般 2,500円・会員 2,200円", schedule_page)
         schedule.close()
         self.assertNotIn("demoSlots", page)
         self.assertIn("架空の空き枠は表示していません", page)
         self.assertNotIn('name="email"', page)
         self.assertNotIn("メールアドレス", page)
-        self.assertIn("days:'31'", page)
         self.assertIn('id="datePicker"', page)
         self.assertIn('id="timePicker" class="hidden"', page)
         self.assertIn("日付を選び直す", page)

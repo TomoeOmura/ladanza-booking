@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import unicodedata
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -28,6 +29,7 @@ from google_calendar import (
     load_calendar_settings,
     save_calendar_settings,
     test_calendar_connection,
+    update_booking_contact,
 )
 
 BASE = Path(__file__).resolve().parent
@@ -148,6 +150,10 @@ def description_value(event: dict, label: str) -> str:
     return ""
 
 
+def normalize_phone(value: object) -> str:
+    return re.sub(r"[\s\-‐‑‒–—―−ー()]", "", unicodedata.normalize("NFKC", str(value)))
+
+
 def normalize_lookup_payload(payload: dict) -> tuple[str, str, str] | None:
     booking_id = str(payload.get("reservation_number", "")).strip().upper().replace(" ", "")
     if re.fullmatch(r"[0-9A-F]{8}", booking_id):
@@ -160,15 +166,15 @@ def normalize_lookup_payload(payload: dict) -> tuple[str, str, str] | None:
         if len(email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
             return None
         return booking_id, "email", email
-    phone = re.sub(r"[^0-9]", "", contact)
-    if not re.fullmatch(r"\d{10,11}", phone):
+    phone = normalize_phone(contact)
+    if not re.fullmatch(r"[0-9]{10,11}", phone):
         return None
     return booking_id, "phone", phone
 
 
 def normalize_lookup_phone(payload: dict) -> str | None:
-    phone = re.sub(r"[^0-9]", "", str(payload.get("contact", "")))
-    return phone if re.fullmatch(r"\d{10,11}", phone) else None
+    phone = normalize_phone(payload.get("contact", ""))
+    return phone if re.fullmatch(r"[0-9]{10,11}", phone) else None
 
 
 def lookup_contact_matches(event: dict, kind: str, value: str) -> bool:
@@ -179,7 +185,7 @@ def lookup_contact_matches(event: dict, kind: str, value: str) -> bool:
     if kind == "email":
         stored = description_value(event, "メール").lower()
     else:
-        stored = re.sub(r"[^0-9]", "", description_value(event, "電話"))
+        stored = normalize_phone(description_value(event, "電話"))
     return bool(stored) and hmac.compare_digest(stored, value)
 
 
@@ -379,6 +385,13 @@ def reservation_lookup_file():
     return send_from_directory(BASE, "reservation-lookup.html")
 
 
+@app.get("/reservation-tools.js")
+@app.get("/reservation-tools.css")
+@app.get("/reservation-lookup.js")
+def reservation_assets():
+    return send_from_directory(BASE, request.path.lstrip("/"))
+
+
 @app.get("/admin")
 def admin_page():
     return send_from_directory(BASE, "admin.html")
@@ -515,9 +528,9 @@ def book():
     if payload.get("privacy_consent") is not True:
         return jsonify({"detail": "個人情報の取り扱いへの同意が必要です"}), 400
     name = str(payload["name"]).strip()
-    phone = re.sub(r"[^0-9]", "", str(payload["phone"]))
+    phone = normalize_phone(payload["phone"])
     request_key = str(payload["request_key"]).strip()
-    if len(name) > 80 or not re.fullmatch(r"\d{10,11}", phone):
+    if len(name) > 80 or not re.fullmatch(r"[0-9]{10,11}", phone):
         return jsonify({"detail": "お名前と電話番号を確認してください"}), 400
     if len(request_key) < 20 or len(request_key) > 100:
         return jsonify({"detail": "予約情報を再読み込みしてください"}), 400
@@ -616,9 +629,10 @@ def admin_settings_get():
 
 @app.after_request
 def protect_admin_responses(response):
-    if request.path.startswith(("/api/admin/", "/api/integrations/")):
+    if request.path.startswith(("/api/admin/", "/api/integrations/", "/api/reservations/")) or request.path in {"/api/bookings", "/reservation.html"}:
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
 
@@ -652,6 +666,7 @@ def daily_event_summary(event: dict) -> dict:
         name = name or parts[2]
     return {
         "kind": "booking" if is_booking else "calendar",
+        "event_id": event.get("id", "") if is_booking else "",
         "title": menu if is_booking else title,
         "customer_name": name,
         "instructor": event_instructor(event) or "",
@@ -854,10 +869,47 @@ def reservation_event(token: str) -> dict | None:
     event = get_event(calendar_for("スタジオ主催"), event_id)
     if not event or event_private(event).get("source") != "ladanza-booking":
         return None
-    stored_hash = event_private(event).get("token_hash", "")
-    if not stored_hash or not hmac.compare_digest(stored_hash, token_digest(token)):
+    private = event_private(event)
+    digest = token_digest(token)
+    if not any(stored and hmac.compare_digest(stored, digest)
+               for stored in (private.get("token_hash", ""), private.get("recovery_token_hash", ""))):
         return None
     return event
+
+
+@app.route("/api/admin/bookings/<event_id>/recovery", methods=["GET", "POST"])
+def admin_booking_recovery(event_id):
+    if not admin_required():
+        return jsonify({"detail": "認証に失敗しました"}), 401
+    try:
+        event = get_event(calendar_for(GROUP_INSTRUCTOR), event_id)
+        if not event or event_private(event).get("source") != "ladanza-booking" or event.get("status") == "cancelled":
+            return jsonify({"detail": "対象の予約が見つかりません"}), 404
+        revision = event.get("etag")
+        if not revision:
+            return jsonify({"detail": "予約の更新情報を取得できませんでした。再読み込みしてください"}), 503
+        if request.method == "GET":
+            return jsonify({**lookup_response(event), "customer_name": daily_event_summary(event)["customer_name"],
+                            "phone": description_value(event, "電話"), "revision": revision})
+        payload = request.get_json(silent=True) or {}
+        if payload.get("identity_confirmed") is not True:
+            return jsonify({"detail": "ご本人と予約内容を確認してから保存してください"}), 400
+        phone = normalize_phone(payload.get("phone", ""))
+        if not re.fullmatch(r"[0-9]{10,11}", phone):
+            return jsonify({"detail": "電話番号を10桁または11桁の数字で入力してください"}), 400
+        if payload.get("revision") != revision:
+            return jsonify({"detail": "予約が更新されています。開き直してからご確認ください"}), 409
+        token = reservation_token(event_id, secrets.token_urlsafe(32))
+        updated = update_booking_contact(calendar_for(GROUP_INSTRUCTOR), event, phone,
+                                         contact_digest("phone", phone), token_digest(token))
+        public_url = os.getenv("PUBLIC_URL", request.url_root.rstrip("/"))
+        return jsonify({"reservation_url": f"{public_url}/reservation.html?token={token}",
+                        "revision": updated.get("etag", ""), "phone": phone})
+    except Exception as exc:
+        if getattr(getattr(exc, "resp", None), "status", None) == 412:
+            return jsonify({"detail": "予約が更新されています。開き直してからご確認ください"}), 409
+        app.logger.error("Booking recovery failed error_type=%s", type(exc).__name__)
+        return jsonify({"detail": "保存結果を確認できませんでした。開き直して内容をご確認ください"}), 503
 
 
 @app.get("/api/reservations/<token>")
