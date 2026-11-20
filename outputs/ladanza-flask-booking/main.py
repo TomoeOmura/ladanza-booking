@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import unicodedata
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
@@ -419,6 +420,12 @@ def admin_bookings_styles():
     return send_from_directory(BASE, "admin-bookings.css")
 
 
+@app.get("/admin-staff.js")
+@app.get("/admin-staff.css")
+def admin_staff_asset():
+    return send_from_directory(BASE, request.path.rsplit("/", 1)[1])
+
+
 @app.get("/admin-settings.js")
 def admin_settings_script():
     return send_from_directory(BASE, "admin-settings.js")
@@ -473,9 +480,18 @@ def slots():
     except ValueError:
         return jsonify({"detail": "表示日数が正しくありません"}), 400
     now = datetime.now(JST)
+    first_date = now.date()
+    if request.path == "/api/admin/booking-slots":
+        try:
+            first_date = date.fromisoformat(request.args.get("date", ""))
+            if not now.date() <= first_date <= now.date() + timedelta(days=365):
+                raise ValueError
+        except ValueError:
+            return jsonify({"detail": "今日から1年以内の予約日を選んでください"}), 400
+        days = 1
     opening, closing_time = time(10, 0), time(22, 0)
-    range_start = datetime.combine(now.date(), opening, JST)
-    range_end = datetime.combine(now.date() + timedelta(days=days), closing_time, JST)
+    range_start = datetime.combine(first_date, opening, JST)
+    range_end = datetime.combine(first_date + timedelta(days=days), closing_time, JST)
     try:
         events = list_calendar_events(calendar_for(instructor), range_start, range_end)
     except Exception:
@@ -483,7 +499,7 @@ def slots():
         return jsonify({"detail": "空き状況を取得できません。時間をおいてお試しください"}), 503
     result, slot_id = [], 1
     for offset in range(days):
-        target = now.date() + timedelta(days=offset)
+        target = first_date + timedelta(days=offset)
         closing = datetime.combine(target, closing_time, JST)
         labels = schedule_labels(target, settings, schedule)
         for label in labels:
@@ -508,12 +524,23 @@ def slots():
 
 @app.post("/api/bookings")
 def book():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"detail": "入力内容を確認してください"}), 400
+    return create_booking(payload)
+
+
+def staff_intent(payload):
+    return token_digest(json.dumps([payload.get(key, "") for key in
+        ("customer_id", "customer_revision", "menu", "instructor", "starts_at")], ensure_ascii=False))
+
+
+def create_booking(payload, customer=None):
     try:
         settings = get_settings()
     except Exception:
         app.logger.exception("Calendar-backed settings lookup failed")
         return jsonify({"detail": "予約設定を取得できません。時間をおいてお試しください"}), 503
-    payload = request.get_json(silent=True) or {}
     required = ("menu", "instructor", "starts_at", "name", "phone", "request_key")
     if any(not str(payload.get(key, "")).strip() for key in required):
         return jsonify({"detail": "入力項目が不足しています"}), 400
@@ -547,7 +574,7 @@ def book():
             or start <= datetime.now(JST)):
         return jsonify({"detail": "営業時間外、定休日、または過去の日時です"}), 400
     source = str(payload.get("source", "website")).lower()
-    source = source if source in {"website", "line"} else "website"
+    source = "staff" if customer else source if source in {"website", "line"} else "website"
     public_url = os.getenv("PUBLIC_URL", request.url_root.rstrip("/"))
     request_hash = token_digest(request_key)
     phone_hash = contact_digest("phone", phone)
@@ -567,6 +594,15 @@ def book():
             if already_used:
                 return jsonify({"detail": "20分無料体験はお1人様1回までです。この電話番号ではすでにご利用済みです"}), 409
         events = list_calendar_events(calendar_id, start, end)
+        if customer:
+            from staff_bookings import search_key
+            duplicate = any(event_is_active(event) and event_private(event).get("source") == "ladanza-booking"
+                and (event_private(event).get("customer_id") == customer["id"]
+                     or (event_private(event).get("phone_hash") == phone_hash
+                         and search_key(daily_event_summary(event)["customer_name"]) == search_key(name)))
+                and overlaps(start, end, *event_window(event)) for event in events)
+            if duplicate:
+                return jsonify({"detail": "このお客様は同じ時間帯に予約済みです。予約一覧を確認してください。"}), 409
         matching = [event for event in events if is_group and matching_group_event(event, payload["menu"], instructor, start)]
         if any(event_blocks(event, instructor, start, end, payload["menu"] if is_group else None) for event in events):
             return jsonify({"detail": "この講師は同じ時間帯に別の予約があります"}), 409
@@ -579,6 +615,9 @@ def book():
                          "request_key_hash": request_hash, "token_hash": token_digest(token),
                          "phone_hash": phone_hash,
                          "privacy_consent_at": consent_at, "source": source}
+        if customer:
+            event_payload.update(customer_id=customer["id"], staff_intent_hash=staff_intent({
+                **payload, "customer_id": customer["id"], "customer_revision": customer["revision"]}))
         created = create_event(calendar_id, start, end, event_payload, event_id=event_id)
     except Exception:
         try:
@@ -710,7 +749,7 @@ def admin_availability(target: date, settings: dict, events: list[dict], now: da
 
 def overview_events(events: list[dict]) -> list[dict]:
     return [event for event in events if event.get("status") != "cancelled"
-            and event_private(event).get("source") != "ladanza-booking-settings"]
+            and event_private(event).get("source") not in {"ladanza-booking-settings", "ladanza-booking-customer"}]
 
 
 @app.get("/api/admin/month")
@@ -999,6 +1038,10 @@ def cancel(token):
         app.logger.exception("Google Calendar cancellation failed")
         return jsonify({"detail": "キャンセル処理を完了できませんでした。La Danzaへお問い合わせください"}), 503
     return {"ok": True, "status": "cancelled"}
+
+
+import staff_bookings
+staff_bookings.register(app, sys.modules[__name__])
 
 
 if __name__ == "__main__":

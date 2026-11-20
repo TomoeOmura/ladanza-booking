@@ -196,6 +196,8 @@ def create_event(calendar_id: str, start: datetime, end: datetime, booking: dict
         "phone_hash": str(booking.get("phone_hash", "")),
         "status": "confirmed",
     }
+    if booking.get("customer_id"):
+        private.update(customer_id=booking["customer_id"], staff_intent_hash=booking["staff_intent_hash"])
     description = f"講師: {booking['instructor']}\nお名前: {booking['name']}\n電話: {booking['phone']}"
     if booking.get("email"):
         description += f"\nメール: {booking['email']}"

@@ -8,19 +8,23 @@ function japanToday(){
 
 let monthOverview=null,monthRequestNumber=0,calendarMonth='';
 function switchAdminView(view){
-  if(view==='bookings'&&!commitVisible())return;
+  if(view!=='settings'&&!commitVisible())return false;
   const showingBookings=view==='bookings';
   $('#bookingOverview').classList.toggle('hidden',!showingBookings);
-  $('#scheduleEditor').classList.toggle('hidden',showingBookings);
+  $('#scheduleEditor').classList.toggle('hidden',view!=='settings');
+  $('#staffBooking').classList.toggle('hidden',view!=='staff');
   $('#bookingsTab').setAttribute('aria-pressed',String(showingBookings));
-  $('#scheduleTab').setAttribute('aria-pressed',String(!showingBookings));
+  $('#scheduleTab').setAttribute('aria-pressed',String(view==='settings'));
+  $('#staffTab').setAttribute('aria-pressed',String(view==='staff'));
   if(showingBookings){$('#unsavedNotice').classList.toggle('hidden',!changes().length);loadDailyBookings();loadMonthBookings()}
+  return true;
 }
 function initializeDailyOverview(){
   if(dailyInitialized)return;dailyInitialized=true;
   $('#bookingDate').value=japanToday();calendarMonth=japanToday().slice(0,7);
   for(const name of instructors){const option=node('option',name);option.value=name;$('#bookingInstructor').append(option)}
   $('#bookingsTab').onclick=()=>switchAdminView('bookings');$('#scheduleTab').onclick=()=>switchAdminView('settings');
+  $('#staffTab').onclick=()=>window.LaDanzaStaff.open();
   $('#bookingDate').onchange=()=>selectBookingDate($('#bookingDate').value);
   $('#bookingRefresh').onclick=()=>{loadDailyBookings();loadMonthBookings()};
   $('#bookingToday').onclick=()=>selectBookingDate(japanToday());
@@ -106,7 +110,7 @@ function renderDailyBookings(){
     content.append(name,detail);
     if(row.reservation_number){const number=document.createElement('p');number.className='daily-updated';number.textContent='予約番号 '+row.reservation_number;content.append(number)}
     const badge=document.createElement('span');badge.className='daily-badge';badge.textContent=row.status==='cancelled'?'キャンセル':row.kind==='calendar'?'カレンダー予定':'予約確定';
-    if(row.kind==='booking'&&row.event_id){const repair=node('button','電話番号の修正・確認リンク再発行','secondary');repair.type='button';repair.onclick=()=>openBookingRecovery(row,content,repair);content.append(repair)}
+    if(row.kind==='booking'&&row.event_id){const next=node('button','このお客様の次回予約','secondary');next.type='button';next.onclick=()=>window.LaDanzaStaff.fromBooking(row.event_id);content.append(next);const repair=node('button','電話番号の修正・確認リンク再発行','secondary');repair.type='button';repair.onclick=()=>openBookingRecovery(row,content,repair);content.append(repair)}
     card.append(time,content,badge);$('#bookingList').append(card);
   }
 }
