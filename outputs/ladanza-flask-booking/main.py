@@ -312,6 +312,9 @@ def schedule_labels(target: date, settings: dict, resource: str) -> list[str]:
     if resource == "社会人サークル" and target < date(2026, 10, 14):
         return []
     overrides = settings["date_overrides"].get(resource, {})
+    # Nov 30: Omura Takeru accepts private lessons from 18:00.
+    if resource == "大村 尊" and target == date(2026, 11, 30):
+        return [label for label in TIME_SLOTS if "18:00" <= label < settings["close_time"]]
     # Dec 21 salon: daytime 13:00–15:00 and evening 19:00–21:00 only.
     if resource == "サロン" and target == date(2026, 12, 21):
         return ["13:00", "13:30", "14:00", "14:30", "19:00", "19:30", "20:00", "20:30"]
