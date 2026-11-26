@@ -326,6 +326,12 @@ def schedule_labels(target: date, settings: dict, resource: str) -> list[str]:
 
 
 def slot_window_enabled(start: datetime, duration: int, settings: dict, instructor: str) -> bool:
+    # 2026-11-30: close only the daytime salon (13:00–15:00).
+    if (instructor == "サロン" and start.date() == date(2026, 11, 30)
+            and overlaps(start, start + timedelta(minutes=duration),
+                         datetime(2026, 11, 30, 13, tzinfo=JST),
+                         datetime(2026, 11, 30, 15, tzinfo=JST))):
+        return False
     if instructor in {"テーマパークダンス", "社会人サークル"}:
         enabled = set(schedule_labels(start.date(), settings, instructor))
         return start.strftime("%H:%M") in enabled
